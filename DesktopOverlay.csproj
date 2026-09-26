@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>DesktopOverlay</AssemblyName>
+    <RootNamespace>DesktopOverlay</RootNamespace>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <Product>Обои рабочего стола</Product>
+    <AssemblyTitle>Обои рабочего стола</AssemblyTitle>
+    <Description>Ставит картинку или сплошной цвет на рабочий стол поверх системных обоев под ярлыками и панелью задач.</Description>
+    <Version>1.1.0</Version>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <PublishReadyToRun>false</PublishReadyToRun>
+  </PropertyGroup>
+
+</Project>
