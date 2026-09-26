@@ -5,8 +5,14 @@ internal static class Program
     internal const string AppName = "DesktopOverlay";
     private const string MutexName = @"Local\DesktopOverlay.SingleInstance";
 
+    private static readonly string[] ImageExtensions =
+        { ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tif", ".tiff" };
+
     internal static string DataDir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), AppName);
+
+    internal static bool IsSupportedImage(string path) =>
+        ImageExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
 
     internal static string? SavedWallpaperPath
     {
@@ -14,7 +20,7 @@ internal static class Program
         {
             try
             {
-                foreach (var ext in new[] { ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tif", ".tiff" })
+                foreach (var ext in ImageExtensions)
                 {
                     var candidate = Path.Combine(DataDir, "wallpaper" + ext);
                     if (File.Exists(candidate))
