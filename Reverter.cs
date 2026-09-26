@@ -25,8 +25,8 @@ internal static class Reverter
 
         if (restoreLightTheme)
         {
-            ThemeUtil.SetLight();
-            done.Add("светлая тема восстановлена");
+            if (ThemeUtil.SetLight())
+                done.Add("светлая тема восстановлена");
         }
 
         if (DeleteSavedImage())
@@ -92,55 +92,95 @@ internal static class Reverter
     }
 }
 
+internal enum WindowsTheme
+{
+    Light,
+    Dark,
+}
+
 internal static class ThemeUtil
 {
     private const string Key = @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
 
-    internal static bool IsDarkTheme()
+    internal static bool IsDarkTheme() => ReadTheme() == WindowsTheme.Dark;
+
+    internal static WindowsTheme ReadTheme()
     {
         try
         {
             using var handle = Registry.CurrentUser.OpenSubKey(Key, writable: false);
-            var appTheme = handle?.GetValue("AppsUseLightTheme");
-            var sysTheme = handle?.GetValue("SystemUsesLightTheme");
 
-            if (appTheme is int app && app == 0) return true;
-            if (sysTheme is int sys && sys == 0) return true;
-            return false;
+            if (TryReadFlag(handle, "AppsUseLightTheme", out var apps))
+                return apps ? WindowsTheme.Light : WindowsTheme.Dark;
+
+            if (TryReadFlag(handle, "SystemUsesLightTheme", out var system))
+                return system ? WindowsTheme.Light : WindowsTheme.Dark;
+
+            return WindowsTheme.Light;
         }
-        catch
+        catch (Exception ex)
         {
-            return false;
+            Program.Log("не удалось прочитать тему Windows: " + ex.Message);
+            return WindowsTheme.Light;
         }
     }
 
-    internal static void SetLight() => SetTheme(dark: false);
+    internal static bool SetLight() => SetTheme(dark: false);
 
-    internal static void SetDark() => SetTheme(dark: true);
+    internal static bool SetDark() => SetTheme(dark: true);
 
-    internal static void SetTheme(bool dark)
+    internal static bool SetTheme(bool dark)
     {
+        var target = dark ? WindowsTheme.Dark : WindowsTheme.Light;
+
         try
         {
             using var handle = Registry.CurrentUser.CreateSubKey(Key, writable: true);
+            if (handle is null)
+                return false;
+
             var val = dark ? 0 : 1;
-            handle?.SetValue("AppsUseLightTheme", val, RegistryValueKind.DWord);
-            handle?.SetValue("SystemUsesLightTheme", val, RegistryValueKind.DWord);
-            Program.Log($"Тема Windows переключена на: {(dark ? "Тёмная" : "Светлая")}");
+            handle.SetValue("AppsUseLightTheme", val, RegistryValueKind.DWord);
+            handle.SetValue("SystemUsesLightTheme", val, RegistryValueKind.DWord);
+
+            bool applied = ReadTheme() == target;
+            Program.Log($"Тема Windows: запрошена {(dark ? "тёмная" : "светлая")}, " +
+                        $"подтверждена {(applied ? "да" : "нет")}");
+            return applied;
         }
         catch (Exception ex)
         {
             Program.Log("ошибка переключения темы: " + ex.Message);
+            return false;
         }
     }
 
-    internal static bool ToggleThemeAndRestartExplorer()
+    internal static bool ApplyAndRestartExplorer(bool dark)
     {
-        bool currentIsDark = IsDarkTheme();
-        bool newDark = !currentIsDark;
-        SetTheme(newDark);
-        RestartExplorer();
-        return newDark;
+        bool changed = ReadTheme() != (dark ? WindowsTheme.Dark : WindowsTheme.Light);
+        bool applied = SetTheme(dark);
+
+        if (changed || !applied)
+            RestartExplorer();
+
+        return applied;
+    }
+
+    private static bool TryReadFlag(RegistryKey? key, string name, out bool isLight)
+    {
+        isLight = true;
+
+        if (key is null)
+            return false;
+
+        switch (key.GetValue(name))
+        {
+            case int i: isLight = i != 0; return true;
+            case long l: isLight = l != 0; return true;
+            case byte b: isLight = b != 0; return true;
+            case string s when int.TryParse(s, out var parsed): isLight = parsed != 0; return true;
+            default: return false;
+        }
     }
 
     internal static void RestartExplorer()

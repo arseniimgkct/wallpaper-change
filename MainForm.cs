@@ -4,13 +4,11 @@ namespace DesktopOverlay;
 
 internal sealed class MainForm : Form
 {
-    private static readonly string[] ImageExtensions =
-        { ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tif", ".tiff" };
-
     private readonly DropZone _drop;
     private readonly Label _hint;
     private readonly Button _pickFile;
     private readonly Button _pickColor;
+    private readonly Button _paste;
     private readonly Button _apply;
     private readonly Button _revert;
     private readonly Button _themeToggle;
@@ -24,11 +22,12 @@ internal sealed class MainForm : Form
     internal MainForm(string? preselect = null, bool autoApply = false)
     {
         Text = "Обои рабочего стола — " + Program.AppName;
-        ClientSize = new Size(460, 430);
+        ClientSize = new Size(500, 430);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         AllowDrop = true;
+        KeyPreview = true;
         BackColor = Color.FromArgb(18, 18, 18);
         ForeColor = Color.FromArgb(230, 230, 230);
         Font = new Font("Segoe UI", 9F);
@@ -36,7 +35,7 @@ internal sealed class MainForm : Form
 
         _drop = new DropZone
         {
-            Bounds = new Rectangle(20, 16, 420, 170),
+            Bounds = new Rectangle(20, 16, 460, 170),
         };
 
         _hint = new Label
@@ -45,7 +44,7 @@ internal sealed class MainForm : Form
             TextAlign = ContentAlignment.MiddleCenter,
             ForeColor = Color.FromArgb(140, 140, 140),
             Font = new Font("Segoe UI", 9.5F),
-            Text = "Перетащите картинку сюда\r\nили выберите файл / сплошной цвет ниже\r\n\r\nJPG, PNG, BMP, GIF, TIFF",
+            Text = "Перетащите картинку сюда\r\nили выберите файл / сплошной цвет ниже\r\n\r\nCtrl+V — вставить из буфера обмена\r\nJPG, PNG, BMP, GIF, TIFF",
             BackColor = Color.Transparent,
             Cursor = Cursors.Hand,
         };
@@ -80,28 +79,33 @@ internal sealed class MainForm : Form
             presetX += 32;
         }
 
-        _pickColor = CreateDarkButton("Палитра…", 260, 196, 86, 26);
+        _pickColor = CreateDarkButton("Палитра…", 256, 196, 74, 26);
         _pickColor.Click += (_, _) => PickCustomColor();
         Controls.Add(_pickColor);
 
-        _pickFile = CreateDarkButton("Обзор…", 354, 196, 86, 26);
+        _pickFile = CreateDarkButton("Обзор…", 334, 196, 74, 26);
         _pickFile.Click += (_, _) => PickFile();
         Controls.Add(_pickFile);
 
-        _apply = CreateDarkButton("Установить обои", 20, 234, 260, 34, isPrimary: true);
+        _paste = CreateDarkButton("📋 Буфер", 412, 196, 68, 26);
+        _paste.Click += (_, _) => PasteFromClipboard();
+        new ToolTip().SetToolTip(_paste, "Вставить картинку из буфера обмена (Ctrl+V)");
+        Controls.Add(_paste);
+
+        _apply = CreateDarkButton("Установить обои", 20, 234, 300, 34, isPrimary: true);
         _apply.Click += (_, _) => ApplyWallpaper();
         _apply.Enabled = false;
 
-        _revert = CreateDarkButton("Откатить всё", 290, 234, 150, 34);
+        _revert = CreateDarkButton("Откатить всё", 330, 234, 150, 34);
         _revert.Click += (_, _) => Revert();
 
-        _themeToggle = CreateDarkButton("🌓 Переключить тему Windows", 20, 278, 420, 34);
+        _themeToggle = CreateDarkButton("🌓 Переключить тему Windows", 20, 278, 460, 34);
         _themeToggle.Click += (_, _) => ToggleWindowsTheme();
         UpdateThemeButtonText();
 
         _autoStart = new CheckBox
         {
-            Bounds = new Rectangle(20, 322, 420, 24),
+            Bounds = new Rectangle(20, 322, 460, 24),
             Text = "Запускать вместе с Windows",
             AutoSize = false,
             Checked = AutoStart.IsEnabled,
@@ -117,7 +121,7 @@ internal sealed class MainForm : Form
 
         _status = new Label
         {
-            Bounds = new Rectangle(20, 354, 420, 65),
+            Bounds = new Rectangle(20, 354, 460, 65),
             ForeColor = Color.FromArgb(125, 125, 125),
             Font = new Font("Segoe UI", 8.5F),
             Text = "Оверлей работает поверх политик, пока запущена программа.\nЗначок приложения находится в системном трее.",
@@ -153,6 +157,17 @@ internal sealed class MainForm : Form
     {
         base.OnHandleCreated(e);
         Native.EnableDarkModeForWindow(Handle);
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == (Keys.Control | Keys.V))
+        {
+            PasteFromClipboard();
+            return true;
+        }
+
+        return base.ProcessCmdKey(ref msg, keyData);
     }
 
     private static Button CreateDarkButton(string text, int x, int y, int width, int height, bool isPrimary = false)
@@ -219,6 +234,22 @@ internal sealed class MainForm : Form
             SelectFile(dialog.FileName);
     }
 
+    private void PasteFromClipboard()
+    {
+        if (!ClipboardImage.TryTake(out var path, out var error))
+        {
+            _status.Text = error;
+            return;
+        }
+
+        SelectFile(path);
+        if (_chosen is null)
+            return;
+
+        _status.Text = "Картинка из буфера обмена выбрана, устанавливаю...";
+        ApplyWallpaper("Картинка из буфера обмена установлена на рабочий стол.");
+    }
+
     private void PickCustomColor()
     {
         using var dialog = new ColorDialog
@@ -281,13 +312,13 @@ internal sealed class MainForm : Form
 
         foreach (var file in files)
         {
-            if (File.Exists(file) && IsSupported(file))
+            if (File.Exists(file) && Program.IsSupportedImage(file))
                 return file;
 
             if (Directory.Exists(file))
             {
                 var found = Directory.EnumerateFiles(file)
-                    .Where(IsSupported)
+                    .Where(Program.IsSupportedImage)
                     .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
                     .FirstOrDefault();
                 if (found is not null)
@@ -297,9 +328,6 @@ internal sealed class MainForm : Form
 
         return null;
     }
-
-    private static bool IsSupported(string path) =>
-        ImageExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
 
     private void SelectFile(string path, bool isSolidColor = false, string? colorHex = null)
     {
@@ -330,12 +358,14 @@ internal sealed class MainForm : Form
     {
         bool isDark = ThemeUtil.IsDarkTheme();
         _themeToggle.Text = isDark
-            ? "☀ Переключить на светлую тему Windows"
-            : "🌙 Переключить на тёмную тему Windows";
+            ? "☀ Сменить тему Windows на светлую"
+            : "🌙 Сменить тему Windows на тёмную";
     }
 
     private void ToggleWindowsTheme()
     {
+        bool dark = !ThemeUtil.IsDarkTheme();
+
         _status.Text = "Переключение темы Windows и перезапуск проводника...";
         Cursor = Cursors.WaitCursor;
         _themeToggle.Enabled = false;
@@ -343,9 +373,12 @@ internal sealed class MainForm : Form
 
         try
         {
-            bool newDark = ThemeUtil.ToggleThemeAndRestartExplorer();
+            bool applied = ThemeUtil.ApplyAndRestartExplorer(dark);
             UpdateThemeButtonText();
-            _status.Text = $"Тема переключена: {(newDark ? "Тёмная" : "Светлая")}. Проводник перезапущен.";
+
+            _status.Text = applied
+                ? $"Тема переключена: {(dark ? "Тёмная" : "Светлая")}. Проводник перезапущен."
+                : "Не удалось переключить тему Windows — проверьте права записи в реестр.";
         }
         catch (Exception ex)
         {
@@ -358,7 +391,7 @@ internal sealed class MainForm : Form
         }
     }
 
-    private void ApplyWallpaper()
+    private void ApplyWallpaper(string? successStatus = null)
     {
         if (_chosen is null)
             return;
@@ -374,7 +407,7 @@ internal sealed class MainForm : Form
             return;
         }
 
-        _status.Text = "Обои успешно установлены поверх системных.";
+        _status.Text = successStatus ?? "Обои успешно установлены поверх системных.";
         _autoStart.Checked = AutoStart.IsEnabled;
     }
 
