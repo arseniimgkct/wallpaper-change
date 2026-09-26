@@ -39,7 +39,6 @@ internal static class Native
     internal const int RDW_ALLCHILDREN = 0x0080;
     internal const int RDW_FRAME = 0x0400;
 
-    /// <summary>Не документированное сообщение оболочки: расщепляет Progman на два WorkerW.</summary>
     internal const uint MSG_SPLIT_WORKERW = 0x052C;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -128,11 +127,6 @@ internal static class Native
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
 
-    /// <summary>
-    /// Пересчитывает координаты между окнами. При hWndFrom = NULL точки трактуются
-    /// как экранные. Надёжнее ручного «screen минус ClientToScreen», особенно когда
-    /// у хоста есть неклиентская область.
-    /// </summary>
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern int MapWindowPoints(IntPtr hWndFrom, IntPtr hWndTo, ref POINT lpPoint, uint cPoints);
 
@@ -187,29 +181,15 @@ internal static class Native
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     internal static extern IntPtr GetModuleHandle(string? lpModuleName);
 
-    /// <summary>
-    /// Ищет окно WorkerW, в которое надо вклеить оверлей.
-    ///
-    /// Важный нюанс, на котором спотыкаются почти все самодельные реализации:
-    ///целиться нужно НЕ в тот WorkerW, где живут иконки (SHELLDLL_DefView), а в
-    /// соседний, расположенный НИЖЕ него по Z-order. Именно так делают Lively,
-    /// Wallpaper Engine и WallPop. WorkerW с иконками прозрачен, поэтому наш контент
-    /// виден сквозь него, а иконки остаются сверху и не требуют перерисовки.
-    ///
-    /// Если сделать родителем WorkerW с самими иконками, список SysListView32 окажется
-    /// над нами и начнёт затирать картинку своим фоном.
-    /// </summary>
     internal static IntPtr FindWallpaperWorkerW()
     {
         IntPtr progman = FindWindow("Progman", null);
         if (progman == IntPtr.Zero)
             progman = FindTopLevelByClass("Progman");
 
-        // Просим оболочку создать второй WorkerW, если его ещё нет.
         if (progman != IntPtr.Zero)
             SendMessageTimeout(progman, MSG_SPLIT_WORKERW, IntPtr.Zero, IntPtr.Zero, 0, 1000, out _);
 
-        // EnumWindows идёт сверху вниз по Z-order — это тот порядок, который нужен.
         var workers = new List<IntPtr>();
         EnumWindows((hwnd, _) =>
         {
@@ -224,23 +204,12 @@ internal static class Native
         if (iconsIndex < 0)
             return IntPtr.Zero;
 
-        // Следующий WorkerW в списке = тот, что ниже слоя иконок.
         if (iconsIndex + 1 < workers.Count)
             return workers[iconsIndex + 1];
 
-        // Запасной вариант: WorkerW под слоем иконок не нашлось — берём Progman,
-        // наш слой ляжет в самый низ его дочерних окон, под SHELLDLL_DefView.
         return progman;
     }
 
-    /// <summary>
-    /// Принудительно перерисовывает весь рабочий стол.
-    ///
-    /// Нужна после снятия оверлея: оболочка не считает нужным трогать область, которую
-    /// занимало наше окно, и на экране остаются залипшие пиксели картинки — вплоть до
-    /// перезапуска проводника. RedrawWindow с RDW_ERASE по Progman и всем WorkerW
-    /// заставляет оболочку заново нарисовать системные обои.
-    /// </summary>
     internal static void RedrawDesktop()
     {
         uint flags = RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_FRAME;
@@ -284,9 +253,7 @@ internal static class Native
             return;
 
         int trueValue = 1;
-        // 20 = DWMWA_USE_IMMERSIVE_DARK_MODE in modern Windows 10/11
         DwmSetWindowAttribute(hwnd, 20, ref trueValue, sizeof(int));
-        // 19 = DWMWA_USE_IMMERSIVE_DARK_MODE in earlier Windows 10 builds
         DwmSetWindowAttribute(hwnd, 19, ref trueValue, sizeof(int));
     }
 }

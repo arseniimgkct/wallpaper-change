@@ -2,10 +2,6 @@ using System.Drawing.Imaging;
 
 namespace DesktopOverlay;
 
-/// <summary>
-/// Главное окно утилиты: выбор картинки или сплошного цвета, установка оверлея,
-/// переключение темы Windows и откат настроек.
-/// </summary>
 internal sealed class MainForm : Form
 {
     private static readonly string[] ImageExtensions =
@@ -38,7 +34,6 @@ internal sealed class MainForm : Form
         Font = new Font("Segoe UI", 9F);
         Icon = Program.LoadAppIcon();
 
-        // Область предпросмотра и Drag & Drop
         _drop = new DropZone
         {
             Bounds = new Rectangle(20, 16, 420, 170),
@@ -56,7 +51,6 @@ internal sealed class MainForm : Form
         };
         _drop.Controls.Add(_hint);
 
-        // Палитра быстрых пресетов цветов
         var colorLabel = new Label
         {
             Text = "Цвет:",
@@ -94,7 +88,6 @@ internal sealed class MainForm : Form
         _pickFile.Click += (_, _) => PickFile();
         Controls.Add(_pickFile);
 
-        // Основные кнопки действий
         _apply = CreateDarkButton("Установить обои", 20, 234, 260, 34, isPrimary: true);
         _apply.Click += (_, _) => ApplyWallpaper();
         _apply.Enabled = false;
@@ -102,12 +95,10 @@ internal sealed class MainForm : Form
         _revert = CreateDarkButton("Откатить всё", 290, 234, 150, 34);
         _revert.Click += (_, _) => Revert();
 
-        // Кнопка переключения темы Windows
         _themeToggle = CreateDarkButton("🌓 Переключить тему Windows", 20, 278, 420, 34);
         _themeToggle.Click += (_, _) => ToggleWindowsTheme();
         UpdateThemeButtonText();
 
-        // Автозапуск
         _autoStart = new CheckBox
         {
             Bounds = new Rectangle(20, 322, 420, 24),
@@ -124,7 +115,6 @@ internal sealed class MainForm : Form
                 AutoStart.Set(_autoStart.Checked);
         };
 
-        // Статус
         _status = new Label
         {
             Bounds = new Rectangle(20, 354, 420, 65),
@@ -215,8 +205,6 @@ internal sealed class MainForm : Form
         tip.SetToolTip(btn, tooltip);
         return btn;
     }
-
-    // --- выбор картинки или цвета ---
 
     private void PickFile()
     {
@@ -338,8 +326,6 @@ internal sealed class MainForm : Form
             : $"Выбран файл: {Path.GetFileName(path)}";
     }
 
-    // --- смена темы Windows ---
-
     private void UpdateThemeButtonText()
     {
         bool isDark = ThemeUtil.IsDarkTheme();
@@ -371,8 +357,6 @@ internal sealed class MainForm : Form
             _themeToggle.Enabled = true;
         }
     }
-
-    // --- установка и откат обоев ---
 
     private void ApplyWallpaper()
     {
@@ -431,13 +415,10 @@ internal sealed class MainForm : Form
         _status.Text = "Откат выполнен: " + report + ".";
     }
 
-    // --- жизненный цикл окна ---
-
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         if (!_reallyExit)
         {
-            // Сворачиваем в трей, чтобы оверлей продолжал работать
             e.Cancel = true;
             Hide();
             return;
@@ -463,9 +444,6 @@ internal sealed class MainForm : Form
     }
 }
 
-/// <summary>
-/// Минималистичная плоская область предпросмотра без рамок «окно в окне».
-/// </summary>
 internal sealed class DropZone : PictureBox
 {
     public DropZone()

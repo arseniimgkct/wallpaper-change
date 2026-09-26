@@ -2,11 +2,6 @@ using Microsoft.Win32;
 
 namespace DesktopOverlay;
 
-/// <summary>
-/// Держит оверлей включённым: окно на WorkerW, watchdog, периодическую
-/// перерисовку и значок в трее. Умеет включаться и выключаться, чтобы
-/// окно утилиты могло применять и откатывать обои.
-/// </summary>
 internal sealed class OverlayEngine : IDisposable
 {
     private Image? _image;
@@ -15,19 +10,14 @@ internal sealed class OverlayEngine : IDisposable
     private System.Windows.Forms.Timer? _repaint;
     private OverlayWindow? _window;
 
-    /// <summary>Оверлей сейчас показан на рабочем столе.</summary>
     internal bool IsApplied { get; private set; }
 
-    /// <summary>Пользователь выбрал в трее «Показать окно утилиты».</summary>
     internal Action? ShowRequested { get; set; }
 
-    /// <summary>Пользователь выбрал в трее «Выход».</summary>
     internal Action? ExitRequested { get; set; }
 
-    /// <summary>Пользователь выбрал в трее «Откатить обои».</summary>
     internal Action? RevertRequested { get; set; }
 
-    /// <summary>Вызывается, когда оверлей упал и не смог восстановиться.</summary>
     internal Action<string>? StatusChanged { get; set; }
 
     internal bool Apply(Image image, bool tray)
@@ -46,11 +36,6 @@ internal sealed class OverlayEngine : IDisposable
         _watchdog.Tick += (_, _) => EnsureOverlay();
         _watchdog.Start();
 
-        // Оболочка периодически перерисовывает свои обои поверх рабочего стола и
-        // затирает наше окно, не присылая WM_PAINT. Поэтому перерисовываем картинку
-        // сами раз в секунду: картинка кэшируется и переносится одним
-        // DrawImageUnscaled, так что это почти бесплатно. Без этого картинка
-        // мигает и пропадает.
         _repaint = new System.Windows.Forms.Timer { Interval = 1000 };
         _repaint.Tick += (_, _) => _window?.ForceRepaint();
         _repaint.Start();
@@ -59,7 +44,6 @@ internal sealed class OverlayEngine : IDisposable
         return IsHealthy();
     }
 
-    /// <summary>Снимает оверлей: рабочий стол возвращается к обычным обоям.</summary>
     internal void Remove()
     {
         IsApplied = false;
@@ -69,10 +53,6 @@ internal sealed class OverlayEngine : IDisposable
         if (_watchdog is not null) { _watchdog.Stop(); _watchdog.Dispose(); _watchdog = null; }
         if (_repaint is not null) { _repaint.Stop(); _repaint.Dispose(); _repaint = null; }
 
-        // Сначала заливаем окно настоящими системными обоями: после DestroyWindow
-        // оболочка не перерисовывает занятую нами область, и на экране остаются
-        // залипшие пиксели картинки. Пока окно живо, безопаснее нарисовать в нём то,
-        // что должно быть под ним.
         if (_window is { } alive && alive.IsAlive && alive.ShowSystemWallpaper())
         {
             Thread.Sleep(150);
@@ -149,10 +129,6 @@ internal sealed class OverlayEngine : IDisposable
         _window = null;
     }
 
-    /// <summary>
-    /// Точка сердца: если окно пропало (перезапуск Explorer) или отцепилось —
-    /// пересоздаём и прикрепляем заново.
-    /// </summary>
     private void EnsureOverlay(bool force = false)
     {
         if (!IsApplied || _image is null)

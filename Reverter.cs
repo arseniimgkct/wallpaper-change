@@ -3,23 +3,10 @@ using Microsoft.Win32;
 
 namespace DesktopOverlay;
 
-/// <summary>
-/// Откат к состоянию «как было». Здесь всё намеренно детерминированно, без
-/// снимков реестра: снимок бесполезен, если значения уже были изменены кем-то
-/// раньше. Вместо этого мы убираем ровно то, что меняет наша утилита.
-///
-/// Что трогает утилита:
-///   • окно-оверлей на рабочем столе — убирается в OverlayEngine.Remove();
-///   • автозапуск в CurrentVersion\Run;
-///   • копию картинки в %APPDATA%;
-///   • ключи HKCU\Control Panel\Desktop\Wallpaper*, если они указывают на локальный
-///     файл (то есть наш переопределитель поверх доменной политики).
-/// </summary>
 internal static class Reverter
 {
     private const string DesktopKey = @"Control Panel\Desktop";
 
-    /// <summary>Возвращает human-readable отчёт о том, что было восстановлено.</summary>
     internal static string RevertAll(OverlayEngine? engine, bool restoreLightTheme)
     {
         var done = new List<string>();
@@ -52,10 +39,6 @@ internal static class Reverter
         return report;
     }
 
-    /// <summary>
-    /// Удаляет наш переопределитель обоев, чтобы Windows снова взяла картинку
-    /// из доменной политики. UNC-пути (\\домен\...) не трогаем — это не наше.
-    /// </summary>
     private static bool ClearWallpaperOverride()
     {
         try
@@ -66,7 +49,6 @@ internal static class Reverter
             if (string.IsNullOrWhiteSpace(wallpaper))
                 return false;
 
-            // UNC — это доменная политика, наш переопределитель тут ни при чём.
             if (wallpaper.StartsWith(@"\\", StringComparison.Ordinal))
                 return false;
 
@@ -110,7 +92,6 @@ internal static class Reverter
     }
 }
 
-/// <summary>Переключение темы оформления Windows (тёмная/светлая) через реестр и перезапуск проводника.</summary>
 internal static class ThemeUtil
 {
     private const string Key = @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";

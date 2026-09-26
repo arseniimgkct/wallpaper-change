@@ -2,7 +2,6 @@ using Microsoft.Win32;
 
 namespace DesktopOverlay;
 
-/// <summary>Автозапуск утилиты при входе в Windows через CurrentVersion\Run.</summary>
 internal static class AutoStart
 {
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -24,10 +23,6 @@ internal static class AutoStart
         }
     }
 
-    /// <summary>
-    /// Команда автозапуска: с ключом --apply утилита стартует без окна,
-    /// сразу поднимает оверлей с сохранённой картинкой и живёт в трее.
-    /// </summary>
     internal static string? BuildCommand()
     {
         var exe = Environment.ProcessPath;

@@ -8,7 +8,6 @@ internal static class Program
     internal static string DataDir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), AppName);
 
-    /// <summary>Путь к сохранённой копии картинки — её использует автозапуск.</summary>
     internal static string? SavedWallpaperPath
     {
         get
@@ -24,7 +23,6 @@ internal static class Program
             }
             catch
             {
-                // для автозапуска не критично
             }
             return null;
         }
@@ -41,13 +39,11 @@ internal static class Program
         }
         catch
         {
-            // логирование не должно ронять приложение
         }
     }
 
     private static Icon? _appIcon;
 
-    /// <summary>Значок приложения, встроенный в exe.</summary>
     internal static Icon LoadAppIcon()
     {
         if (_appIcon is not null)
@@ -61,7 +57,6 @@ internal static class Program
         }
         catch
         {
-            // не критично
         }
 
         _appIcon ??= SystemIcons.Application;
@@ -85,7 +80,6 @@ internal static class Program
         Application.ThreadException += (_, e) => Log("исключение в UI: " + e.Exception);
         AppDomain.CurrentDomain.UnhandledException += (_, e) => Log("фатальное: " + e.ExceptionObject);
 
-        // Режим автозапуска: окно не показываем, сразу поднимаем оверлей и живём в трее.
         if (args.Length >= 2 && args[0] == "--apply")
         {
             var saved = Program.LoadStableCopy(args[1]);
@@ -97,10 +91,8 @@ internal static class Program
             return;
         }
 
-        // Откат из командной строки — на случай, если окно недоступно.
         if (args.Length >= 1 && args[0] == "--revert")
         {
-            // --revert --light — заодно вернуть светлую тему.
             var light = args.Length >= 2 && args[1] == "--light";
             var report = Reverter.RevertAll(engine: null, restoreLightTheme: light);
             Log("откат из командной строки: " + report);
@@ -109,7 +101,6 @@ internal static class Program
 
         Log("запуск окна утилиты");
 
-        // --set "путь" — открыть окно с уже выбранной картинкой и сразу применить.
         var preselect = null as string;
         var autoApply = false;
         if (args.Length >= 2 && args[0] == "--set")
@@ -122,10 +113,6 @@ internal static class Program
         Log("остановка");
     }
 
-    /// <summary>
-    /// Копирует картинку в %APPDATA%, чтобы оверлей не сломался после очистки «Загрузок».
-    /// Возвращает полностью перерисованный Bitmap — исходный файл закрываем.
-    /// </summary>
     internal static Image? LoadStableCopy(string source)
     {
         try
@@ -158,9 +145,6 @@ internal static class Program
     }
 }
 
-/// <summary>
-/// Безоконный режим для автозапуска: оверлей + трей, форма не показывается.
-/// </summary>
 internal sealed class TrayContext : ApplicationContext
 {
     private readonly OverlayEngine _engine = new();
@@ -169,8 +153,6 @@ internal sealed class TrayContext : ApplicationContext
     {
         _engine.ExitRequested += () => ExitThread();
 
-        // Окна в этом режиме нет: «откатить» значит снять оверлей, вернуть
-        // настройки и выключить автозапуск, иначе картинка вернётся при входе.
         _engine.RevertRequested += () =>
         {
             Reverter.RevertAll(_engine, restoreLightTheme: false);

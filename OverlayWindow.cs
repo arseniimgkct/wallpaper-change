@@ -5,16 +5,10 @@ using System.Windows.Forms;
 
 namespace DesktopOverlay;
 
-/// <summary>
-/// Окно-оверлей поверх рабочего стола. Создаётся сразу как дочернее окно (WS_CHILD)
-/// хоста WorkerW, а не «показывается, а потом перевклеивается» — так надёжнее.
-/// Благодаря тому, что родитель — не top-level окно, панель задач всегда остаётся поверх.
-/// </summary>
 internal sealed class OverlayWindow : IDisposable
 {
     private const string ClassName = "DesktopOverlaySurface";
 
-    // Делегат обязан жить всё время работы окна, иначе GC соберёт callback.
     private static readonly WndProcDelegate WndProc = OnWindowProc;
     private static OverlayWindow? _current;
 
@@ -25,12 +19,6 @@ internal sealed class OverlayWindow : IDisposable
     private Image? _systemWallpaper;
     private bool _showSystemWallpaper;
 
-    /// <summary>
-    /// WS_EX_TRANSPARENT нужен для проскока кликов, но вместе с ним окно
-    /// исключается из композиции DWM на некоторых сборках — картинка перестаёт
-    /// отображаться. Поэтому его можно отключить (OVERLAY_NO_EX_TRANSPARENT=1),
-    /// а проскок кликов обеспечить через WM_NCHITTEST -> HTTRANSPARENT.
-    /// </summary>
     private readonly int _exStyle;
 
     private IntPtr _host;
@@ -59,11 +47,6 @@ internal sealed class OverlayWindow : IDisposable
         Native.IsWindow(_host) &&
         Native.GetParent(Hwnd) == _host;
 
-    /// <summary>
-    /// Создаёт окно и вклеивает его в WorkerW, который лежит НИЖЕ слоя иконок.
-    /// Перерисовывать иконки вручную больше не нужно: слой с ними выше нас и прозрачен,
-    /// поэтому оболочка рисует их поверх нашего окна штатным образом.
-    /// </summary>
     internal bool Attach()
     {
         var host = Native.FindWallpaperWorkerW();
@@ -73,8 +56,6 @@ internal sealed class OverlayWindow : IDisposable
         var screen = Screen.PrimaryScreen!.Bounds;
         var origin = ScreenToClient(host, screen.Left, screen.Top);
 
-        // Окно создаётся сразу дочерним и сразу уводится в самый низ Z-order,
-        // чтобы оказаться под слоем иконок (SHELLDLL_DefView).
         Hwnd = Native.CreateWindowEx(
             _exStyle,
             ClassName,
@@ -102,7 +83,6 @@ internal sealed class OverlayWindow : IDisposable
         return true;
     }
 
-    /// <summary>Растягивает окно на весь основной монитор с поправкой на смещение клиента хоста.</summary>
     internal void LayoutToPrimaryMonitor()
     {
         if (!IsAlive || _host == IntPtr.Zero || !Native.IsWindow(_host))
@@ -129,8 +109,6 @@ internal sealed class OverlayWindow : IDisposable
         if (!IsAlive)
             return;
 
-        // Инвалидируем весь прямоугольник: без этого оболочка может прислать
-        // WM_PAINT с частичной областью, и часть окна останется непокрашенной.
         Native.InvalidateRect(Hwnd, IntPtr.Zero, true);
         Native.UpdateWindow(Hwnd);
     }
@@ -167,7 +145,6 @@ internal sealed class OverlayWindow : IDisposable
             style = Native.CS_HREDRAW | Native.CS_VREDRAW,
             lpfnWndProc = WndProc,
             hInstance = Native.GetModuleHandle(null),
-            // hbrBackground = 0 — фон не стираем, иначе при перерисовке будет мерцание.
             hbrBackground = IntPtr.Zero,
             lpszClassName = ClassName,
         };
@@ -181,15 +158,13 @@ internal sealed class OverlayWindow : IDisposable
         switch (msg)
         {
             case Native.WM_NCHITTEST:
-                // Пропускаем клики к иконкам рабочего стола: окно не должно перехватывать ввод.
-                return new IntPtr(-1); // HTTRANSPARENT
+                return new IntPtr(-1);
 
             case Native.WM_PAINT:
                 self?.HandlePaint(hWnd);
                 return IntPtr.Zero;
 
             case Native.WM_ERASEBKGND:
-                // Фон полностью перекрывается картинкой — сообщаем, что стёрли сами.
                 return new IntPtr(1);
 
             case Native.WM_DISPLAYCHANGE:
@@ -210,22 +185,6 @@ internal sealed class OverlayWindow : IDisposable
         return Native.DefWindowProc(hWnd, msg, wParam, lParam);
     }
 
-    /// <summary>
-    /// Рисуем строго внутри WM_PAINT через BeginPaint: DWM композитит только то,
-    /// что нарисовано в контексте WM_PAINT. Рисование через GetDC после EndPaint
-    /// не отображается вовсе — проверено.
-    ///
-    /// Область обновления при этом может прийти частичной, поэтому перед отрисовкой
-    /// окно полностью инвалидируется (см. ForceRepaint) — тогда rcPaint всегда
-    /// равен всему клиенту и непокрашенных полос не остаётся.
-    ///
-    /// Отдельная важная деталь: оболочка периодически перерисовывает поверх рабочего
-    /// стола свои обои, и наше окно при этом стирается, хотя WM_PAINT нам не приходит.
-    /// На экране картинка «мигает и пропадает». Лечится периодическим перерисовом
-    /// из таймера (см. Program) — именно так ведут себя видео-обои, где кадры идут
-    /// непрерывно. Картинка у нас кэшируется и переносится одним BitBlt, так что
-    /// такая перерисовка почти ничего не стоит.
-    /// </summary>
     private void HandlePaint(IntPtr hWnd)
     {
         var ps = new Native.PAINTSTRUCT();
@@ -272,10 +231,6 @@ internal sealed class OverlayWindow : IDisposable
         Program.Log($"[paint #{_paintLogCount}] {message}");
     }
 
-    /// <summary>
-    /// Масштабированная картинка кэшируется и при каждой перерисовке переносится
-    /// одним DrawImageUnscaled — иначе перерисовка раз в секунду была бы дорогой.
-    /// </summary>
     private void DrawCover(Graphics g, int width, int height, Image source)
     {
         if (width <= 0 || height <= 0)
@@ -285,7 +240,6 @@ internal sealed class OverlayWindow : IDisposable
         {
             _scaled?.Dispose();
 
-            // Режим «cover»: заполняем окно целиком, обрезая лишнее, пропорции сохраняются.
             double scale = Math.Max((double)width / source.Width, (double)height / source.Height);
             int w = (int)Math.Round(source.Width * scale);
             int h = (int)Math.Round(source.Height * scale);
@@ -307,14 +261,6 @@ internal sealed class OverlayWindow : IDisposable
         g.DrawImageUnscaled(_scaled, 0, 0);
     }
 
-    /// <summary>
-    /// Заливает окно настоящими системными обоями перед его уничтожением.
-    ///
-    /// Зачем: после DestroyWindow оболочка не перерисовывает область, которую
-    /// занимало наше окно, и на экране остаются залипшие пиксели картинки — вплоть
-    /// до перезапуска проводника. RedrawWindow по Progman/WorkerW/ListView не помогает.
-    /// Раз окно ещё живо, проще нарисовать в нём то, что должно быть под ним.
-    /// </summary>
     internal bool ShowSystemWallpaper()
     {
         if (!IsAlive)
@@ -334,10 +280,6 @@ internal sealed class OverlayWindow : IDisposable
         return true;
     }
 
-    /// <summary>
-    /// Кэшированная копия текущих системных обоев. Сначала пробуем TranscodedWallpaper
-    /// (его пишет оболочка), затем путь из доменной политики.
-    /// </summary>
     private static Image? LoadSystemWallpaper()
     {
         var candidates = new List<string>
@@ -356,14 +298,12 @@ internal sealed class OverlayWindow : IDisposable
         }
         catch
         {
-            // политика может быть недоступна — не критично
         }
 
         foreach (var path in candidates)
         {
             try
             {
-                // TranscachedWallpaper бывает залочен оболочкой — открываем на чтение с разделением.
                 using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                 using var img = Image.FromStream(stream);
                 return new Bitmap(img);
