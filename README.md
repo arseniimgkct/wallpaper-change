@@ -44,11 +44,13 @@ DesktopOverlay takes a different route. Instead of fighting the shell, it draws 
 | **Image overlay** | Any `JPG`, `JPEG`, `PNG`, `BMP`, `GIF`, `TIF` or `TIFF`. Scaled in *cover* mode: fills the screen completely, preserves aspect ratio, crops the overflow. |
 | **Solid colour overlay** | Six built-in presets plus a full colour picker. Rendered to a full-resolution bitmap and treated exactly like an image. |
 | **Drag and drop** | Drop a file onto the window. Drop a folder and the first supported image inside it is picked up automatically. |
+| **Clipboard** | **Paste** or `Ctrl+V` takes the image straight from the clipboard: a picture copied in a browser or Paint, a screenshot, a copied image file, or a copied path. Applied to the desktop immediately. |
 | **Below everything** | Desktop icons, selection rectangles, right-click menus, taskbar, system tray — all of it stays on top and fully interactive. The overlay never takes focus and never swallows a click. |
 | **Survives Explorer** | A watchdog re-attaches the surface within two seconds of an Explorer restart, and the layout re-flows on resolution, display and DPI changes. |
 | **No flicker** | The shell repaints its own wallpaper periodically and erases the foreign surface without sending `WM_PAINT`. A one-second repaint cycle, backed by a pre-scaled bitmap and a single blit, keeps the image rock steady at effectively zero cost. |
 | **Clean removal** | Before the window is destroyed it repaints itself with the genuine system wallpaper, so not a single pixel of the overlay is left behind. |
-| **Light and dark** | The Windows theme can be flipped from the same window, with an automatic Explorer restart. |
+| **Light and dark** | One button switches the Windows theme to the opposite one and restarts Explorer. No dialogs, no questions — the button always says which theme it will set. |
+| **Small taskbar** | One button shrinks the taskbar from 40 to 30 pixels — the very same "Use small taskbar buttons" setting that corporate machines so often lock away in Settings. Windows 10 only: Microsoft disabled the setting in Windows 11. |
 | **Autostart** | Optional. Restores the last image at logon, without showing a window. |
 | **Revert** | One action, and a written report of exactly what was restored. |
 
@@ -78,10 +80,14 @@ The result is a single self-contained executable. Nothing to install, nothing to
 ## Using it
 
 1. Launch `DesktopOverlay.exe`. The window appears centred.
-2. Drop an image onto the preview area, or press **Browse**, or pick one of the six colour presets, or open the full palette.
-3. Press **Set wallpaper**. The overlay attaches to the desktop and a tray icon appears.
+2. Drop an image onto the preview area, press **Browse**, pick one of the six colour presets, open the full palette — or press **Paste** / `Ctrl+V` to take whatever image is currently in the clipboard.
+3. Press **Set wallpaper**. The overlay attaches to the desktop and a tray icon appears. (A clipboard paste applies itself right away.)
 4. Close the window — it minimises to the tray, the overlay stays.
 5. Tick **Start with Windows** if the image should survive a reboot.
+
+The theme button reads **Switch Windows theme to dark** or **… to light**, depending on the theme in effect, and switches to it on click.
+
+The **Small taskbar** button (or **Restore the normal taskbar**, when the taskbar is already small) changes the taskbar height and restarts Explorer. The taskbar and any open Explorer windows disappear for a second — this is mandatory, because the shell reads the taskbar size only at startup, so nothing would change without the restart. The overlay reattaches on its own within two seconds.
 
 Closing the window never terminates the application. The tray icon is the anchor, and the overlay is only as alive as the tray.
 
@@ -133,12 +139,15 @@ Four details do most of the work:
 | File | Responsibility |
 |---|---|
 | `Program.cs` | Entry point, single-instance mutex, command-line dispatch, headless tray context, log, stable image copy into `%APPDATA%`. |
-| `MainForm.cs` | The user interface: drag and drop, colour presets, palette, preview, apply, revert, autostart toggle, theme switch. |
+| `MainForm.cs` | The user interface: drag and drop, clipboard paste, colour presets, palette, preview, apply, revert, autostart toggle, theme switch. |
+| `ClipboardImage.cs` | Clipboard ingestion: copied image, copied file, copied folder, copied path, with retries while another application holds the clipboard. |
 | `OverlayEngine.cs` | Lifecycle of the overlay: watchdog, repaint timer, tray icon, host search, re-attach on Explorer restart, teardown. |
 | `OverlayWindow.cs` | The surface itself: window class, `WS_CHILD` attach, Z-order, `WM_PAINT` painting, *cover* scaling, clean shutdown repaint. |
 | `Native.cs` | P/Invoke surface: `EnumWindows`, `FindWindowEx`, `CreateWindowEx`, `SetWindowPos`, `RedrawWindow`, plus the `WorkerW` discovery logic and the DWM dark-mode attribute. |
 | `AutoStart.cs` | Autostart through `HKCU\...\CurrentVersion\Run`, with the `--apply` payload. |
-| `Reverter.cs` | Deterministic rollback: overlay, autostart, wallpaper override, saved image, theme. Also `ThemeUtil`. |
+| `Reverter.cs` | Deterministic rollback: overlay, autostart, wallpaper override, taskbar size, saved image, theme. Also `ThemeUtil`. |
+| `TaskbarUtil.cs` | Taskbar button size: reads and writes `TaskbarSmallIcons` in `HKCU\...\Explorer\Advanced`, restores the original state, refuses to run on Windows 11. |
+| `ShellUtil.cs` | The Explorer restart, shared by the theme and the taskbar because the shell reads both settings only at startup. |
 
 ## Safety and rollback
 
@@ -149,6 +158,7 @@ overlay surface            removed via OverlayEngine.Remove()
 autostart entry            deleted from HKCU\...\CurrentVersion\Run
 wallpaper override         Wallpaper, WallpaperStyle, TileWallpaper in HKCU\Control Panel\Desktop
 saved image                wallpaper.* in %APPDATA%\DesktopOverlay
+taskbar size               TaskbarSmallIcons in HKCU\...\Explorer\Advanced
 light theme                restored on request only
 ```
 
@@ -175,6 +185,8 @@ The working copy exists for one reason: so the overlay keeps working after the o
 **The overlay is missing after sign-out or Explorer crash.** Nothing to do: the watchdog restores it. If it does not, re-attach manually from the tray menu.
 
 **The Windows Settings background pane appears unchanged.** That is expected. The overlay does not touch the system wallpaper, which is the entire point of the design.
+
+**The taskbar did not change.** Look for the `Taskbar size: requested …, confirmed …` line in `overlay.log`. If it says `no`, Group Policy has blocked the registry write. If it confirmed the change but the taskbar looks the same, Explorer was not restarted — do it by hand from Task Manager. On Windows 11 the button is disabled and that is expected too: Microsoft removed the setting.
 
 ## License
 

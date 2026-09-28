@@ -12,7 +12,7 @@
     <Product>Обои рабочего стола</Product>
     <AssemblyTitle>Обои рабочего стола</AssemblyTitle>
     <Description>Ставит картинку или сплошной цвет на рабочий стол поверх системных обоев под ярлыками и панелью задач.</Description>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
