@@ -12,6 +12,7 @@ internal sealed class MainForm : Form
     private readonly Button _apply;
     private readonly Button _revert;
     private readonly Button _themeToggle;
+    private readonly Button _taskbarToggle;
     private readonly CheckBox _autoStart;
     private readonly Label _status;
 
@@ -22,7 +23,7 @@ internal sealed class MainForm : Form
     internal MainForm(string? preselect = null, bool autoApply = false)
     {
         Text = "Обои рабочего стола — " + Program.AppName;
-        ClientSize = new Size(500, 430);
+        ClientSize = new Size(500, 472);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
@@ -103,9 +104,13 @@ internal sealed class MainForm : Form
         _themeToggle.Click += (_, _) => ToggleWindowsTheme();
         UpdateThemeButtonText();
 
+        _taskbarToggle = CreateDarkButton("", 20, 320, 460, 34);
+        _taskbarToggle.Click += (_, _) => ToggleTaskbarSize();
+        UpdateTaskbarButtonText();
+
         _autoStart = new CheckBox
         {
-            Bounds = new Rectangle(20, 322, 460, 24),
+            Bounds = new Rectangle(20, 364, 460, 24),
             Text = "Запускать вместе с Windows",
             AutoSize = false,
             Checked = AutoStart.IsEnabled,
@@ -121,13 +126,13 @@ internal sealed class MainForm : Form
 
         _status = new Label
         {
-            Bounds = new Rectangle(20, 354, 460, 65),
+            Bounds = new Rectangle(20, 396, 460, 65),
             ForeColor = Color.FromArgb(125, 125, 125),
             Font = new Font("Segoe UI", 8.5F),
             Text = "Оверлей работает поверх политик, пока запущена программа.\nЗначок приложения находится в системном трее.",
         };
 
-        Controls.AddRange(new Control[] { _drop, _apply, _revert, _themeToggle, _autoStart, _status });
+        Controls.AddRange(new Control[] { _drop, _apply, _revert, _themeToggle, _taskbarToggle, _autoStart, _status });
 
         _hint.Click += (_, _) => PickFile();
         _drop.Click += (_, _) => PickFile();
@@ -391,6 +396,71 @@ internal sealed class MainForm : Form
         }
     }
 
+    private void UpdateTaskbarButtonText()
+    {
+        if (!TaskbarUtil.IsSupported)
+        {
+            _taskbarToggle.Text = "⤢ Уменьшить панель задач (недоступно)";
+            _taskbarToggle.Enabled = false;
+            new ToolTip().SetToolTip(_taskbarToggle, TaskbarUtil.IsSupportedMessage);
+            return;
+        }
+
+        _taskbarToggle.Text = TaskbarUtil.IsSmall == true
+            ? "⤢ Вернуть обычную панель задач"
+            : "⤢ Уменьшить панель задач";
+
+        new ToolTip().SetToolTip(
+            _taskbarToggle,
+            "Панель задач станет ниже на 10 пикселей. Проводник перезапустится.");
+    }
+
+    private void ToggleTaskbarSize()
+    {
+        if (!TaskbarUtil.IsSupported)
+        {
+            _status.Text = TaskbarUtil.IsSupportedMessage;
+            return;
+        }
+
+        bool target = TaskbarUtil.IsSmall != true;
+
+        _status.Text = "Меняю размер панели задач и перезапускаю Проводник...";
+        Cursor = Cursors.WaitCursor;
+        _taskbarToggle.Enabled = false;
+        Application.DoEvents();
+
+        try
+        {
+            if (!TaskbarUtil.SetSmall(target))
+            {
+                _status.Text = "Не удалось изменить панель задач — проверьте права записи в реестр.";
+                return;
+            }
+
+            _status.Text = target
+                ? "Панель задач уменьшена. Проводник перезапущен."
+                : "Панель задач возвращена к обычному размеру. Проводник перезапущен.";
+
+            ShellUtil.RestartExplorer();
+
+            Thread.Sleep(400);
+            Application.DoEvents();
+            Native.RedrawDesktop();
+
+            UpdateTaskbarButtonText();
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "Ошибка изменения панели задач: " + ex.Message;
+        }
+        finally
+        {
+            Cursor = Cursors.Default;
+            _taskbarToggle.Enabled = TaskbarUtil.IsSupported;
+        }
+    }
+
     private void ApplyWallpaper(string? successStatus = null)
     {
         if (_chosen is null)
@@ -444,6 +514,7 @@ internal sealed class MainForm : Form
         _apply.Enabled = false;
         _autoStart.Checked = AutoStart.IsEnabled;
         UpdateThemeButtonText();
+        UpdateTaskbarButtonText();
 
         _status.Text = "Откат выполнен: " + report + ".";
     }
