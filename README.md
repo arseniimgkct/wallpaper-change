@@ -50,6 +50,7 @@ DesktopOverlay takes a different route. Instead of fighting the shell, it draws 
 | **No flicker** | The shell repaints its own wallpaper periodically and erases the foreign surface without sending `WM_PAINT`. A one-second repaint cycle, backed by a pre-scaled bitmap and a single blit, keeps the image rock steady at effectively zero cost. |
 | **Clean removal** | Before the window is destroyed it repaints itself with the genuine system wallpaper, so not a single pixel of the overlay is left behind. |
 | **Light and dark** | One button switches the Windows theme to the opposite one and restarts Explorer. No dialogs, no questions — the button always says which theme it will set. |
+| **Small taskbar** | One button shrinks the taskbar from 40 to 30 pixels — the very same "Use small taskbar buttons" setting that corporate machines so often lock away in Settings. Windows 10 only: Microsoft disabled the setting in Windows 11. |
 | **Autostart** | Optional. Restores the last image at logon, without showing a window. |
 | **Revert** | One action, and a written report of exactly what was restored. |
 
@@ -85,6 +86,8 @@ The result is a single self-contained executable. Nothing to install, nothing to
 5. Tick **Start with Windows** if the image should survive a reboot.
 
 The theme button reads **Switch Windows theme to dark** or **… to light**, depending on the theme in effect, and switches to it on click.
+
+The **Small taskbar** button (or **Restore the normal taskbar**, when the taskbar is already small) changes the taskbar height and restarts Explorer. The taskbar and any open Explorer windows disappear for a second — this is mandatory, because the shell reads the taskbar size only at startup, so nothing would change without the restart. The overlay reattaches on its own within two seconds.
 
 Closing the window never terminates the application. The tray icon is the anchor, and the overlay is only as alive as the tray.
 
@@ -142,7 +145,9 @@ Four details do most of the work:
 | `OverlayWindow.cs` | The surface itself: window class, `WS_CHILD` attach, Z-order, `WM_PAINT` painting, *cover* scaling, clean shutdown repaint. |
 | `Native.cs` | P/Invoke surface: `EnumWindows`, `FindWindowEx`, `CreateWindowEx`, `SetWindowPos`, `RedrawWindow`, plus the `WorkerW` discovery logic and the DWM dark-mode attribute. |
 | `AutoStart.cs` | Autostart through `HKCU\...\CurrentVersion\Run`, with the `--apply` payload. |
-| `Reverter.cs` | Deterministic rollback: overlay, autostart, wallpaper override, saved image, theme. Also `ThemeUtil`. |
+| `Reverter.cs` | Deterministic rollback: overlay, autostart, wallpaper override, taskbar size, saved image, theme. Also `ThemeUtil`. |
+| `TaskbarUtil.cs` | Taskbar button size: reads and writes `TaskbarSmallIcons` in `HKCU\...\Explorer\Advanced`, restores the original state, refuses to run on Windows 11. |
+| `ShellUtil.cs` | The Explorer restart, shared by the theme and the taskbar because the shell reads both settings only at startup. |
 
 ## Safety and rollback
 
@@ -153,6 +158,7 @@ overlay surface            removed via OverlayEngine.Remove()
 autostart entry            deleted from HKCU\...\CurrentVersion\Run
 wallpaper override         Wallpaper, WallpaperStyle, TileWallpaper in HKCU\Control Panel\Desktop
 saved image                wallpaper.* in %APPDATA%\DesktopOverlay
+taskbar size               TaskbarSmallIcons in HKCU\...\Explorer\Advanced
 light theme                restored on request only
 ```
 
@@ -179,6 +185,8 @@ The working copy exists for one reason: so the overlay keeps working after the o
 **The overlay is missing after sign-out or Explorer crash.** Nothing to do: the watchdog restores it. If it does not, re-attach manually from the tray menu.
 
 **The Windows Settings background pane appears unchanged.** That is expected. The overlay does not touch the system wallpaper, which is the entire point of the design.
+
+**The taskbar did not change.** Look for the `Taskbar size: requested …, confirmed …` line in `overlay.log`. If it says `no`, Group Policy has blocked the registry write. If it confirmed the change but the taskbar looks the same, Explorer was not restarted — do it by hand from Task Manager. On Windows 11 the button is disabled and that is expected too: Microsoft removed the setting.
 
 ## License
 

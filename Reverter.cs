@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Microsoft.Win32;
 
 namespace DesktopOverlay;
@@ -22,6 +21,13 @@ internal static class Reverter
 
         if (ClearWallpaperOverride())
             done.Add("системные обои возвращены");
+
+        if (TaskbarUtil.RestoreDefault())
+        {
+            done.Add("обычный размер панели задач восстановлен");
+            ShellUtil.RestartExplorer();
+            Thread.Sleep(400);
+        }
 
         if (restoreLightTheme)
         {
@@ -183,40 +189,5 @@ internal static class ThemeUtil
         }
     }
 
-    internal static void RestartExplorer()
-    {
-        Program.Log("Перезапуск explorer.exe...");
-        try
-        {
-            var processes = Process.GetProcessesByName("explorer");
-            foreach (var p in processes)
-            {
-                try
-                {
-                    p.Kill();
-                    p.WaitForExit(1500);
-                }
-                catch { }
-            }
-        }
-        catch (Exception ex)
-        {
-            Program.Log("ошибка при завершении explorer: " + ex.Message);
-        }
-
-        try
-        {
-            var windir = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-            var explorerPath = Path.Combine(windir, "explorer.exe");
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = File.Exists(explorerPath) ? explorerPath : "explorer.exe",
-                UseShellExecute = true
-            });
-        }
-        catch (Exception ex)
-        {
-            Program.Log("ошибка при запуске explorer: " + ex.Message);
-        }
-    }
+    internal static void RestartExplorer() => ShellUtil.RestartExplorer();
 }
