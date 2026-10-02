@@ -13,6 +13,7 @@ internal sealed class MainForm : Form
     private readonly Button _revert;
     private readonly Button _themeToggle;
     private readonly Button _taskbarToggle;
+    private readonly Button _edgeBrowser;
     private readonly CheckBox _autoStart;
     private readonly Label _status;
 
@@ -23,7 +24,7 @@ internal sealed class MainForm : Form
     internal MainForm(string? preselect = null, bool autoApply = false)
     {
         Text = "Обои рабочего стола — " + Program.AppName;
-        ClientSize = new Size(500, 472);
+        ClientSize = new Size(500, 512);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
@@ -108,9 +109,13 @@ internal sealed class MainForm : Form
         _taskbarToggle.Click += (_, _) => ToggleTaskbarSize();
         UpdateTaskbarButtonText();
 
+        _edgeBrowser = CreateDarkButton("", 20, 362, 460, 34);
+        _edgeBrowser.Click += (_, _) => DetachEdgeAndPickBrowser();
+        UpdateEdgeBrowserButtonText();
+
         _autoStart = new CheckBox
         {
-            Bounds = new Rectangle(20, 364, 460, 24),
+            Bounds = new Rectangle(20, 406, 460, 24),
             Text = "Запускать вместе с Windows",
             AutoSize = false,
             Checked = AutoStart.IsEnabled,
@@ -126,13 +131,16 @@ internal sealed class MainForm : Form
 
         _status = new Label
         {
-            Bounds = new Rectangle(20, 396, 460, 65),
+            Bounds = new Rectangle(20, 438, 460, 65),
             ForeColor = Color.FromArgb(125, 125, 125),
             Font = new Font("Segoe UI", 8.5F),
             Text = "Оверлей работает поверх политик, пока запущена программа.\nЗначок приложения находится в системном трее.",
         };
 
-        Controls.AddRange(new Control[] { _drop, _apply, _revert, _themeToggle, _taskbarToggle, _autoStart, _status });
+        Controls.AddRange(new Control[]
+        {
+            _drop, _apply, _revert, _themeToggle, _taskbarToggle, _edgeBrowser, _autoStart, _status
+        });
 
         _hint.Click += (_, _) => PickFile();
         _drop.Click += (_, _) => PickFile();
@@ -175,7 +183,7 @@ internal sealed class MainForm : Form
         return base.ProcessCmdKey(ref msg, keyData);
     }
 
-    private static Button CreateDarkButton(string text, int x, int y, int width, int height, bool isPrimary = false)
+    internal static Button CreateDarkButton(string text, int x, int y, int width, int height, bool isPrimary = false)
     {
         var btn = new Button
         {
@@ -461,6 +469,79 @@ internal sealed class MainForm : Form
         }
     }
 
+    private void UpdateEdgeBrowserButtonText()
+    {
+        bool pinned = TaskbarPins.IsPinned(TaskbarPins.EdgeName);
+
+        _edgeBrowser.Text = pinned
+            ? $"🌐 Открепить Edge и выбрать браузер (сейчас: {BrowserUtil.CurrentTitle()})"
+            : $"🌐 Edge откреплён, браузер по умолчанию: {BrowserUtil.CurrentTitle()}";
+
+        new ToolTip().SetToolTip(
+            _edgeBrowser,
+            "Передаёт http, https и .htm/.html выбранному браузеру и снимает Microsoft Edge " +
+            "с панели задач. Firefox назначит себя сам, Chrome и Edge попросят подтвердить " +
+            "в своей странице настроек.");
+    }
+
+    private void DetachEdgeAndPickBrowser()
+    {
+        var browsers = BrowserUtil.DetectAlternatives();
+        if (browsers.Count == 0)
+        {
+            _status.Text = "Chrome и Firefox не найдены. Установите один из них, чтобы сменить браузер по умолчанию.";
+            return;
+        }
+
+        BrowserInfo chosen;
+        using (var dialog = new BrowserPickerForm(browsers))
+        {
+            if (dialog.ShowDialog(this) != DialogResult.OK || dialog.Selected is null)
+                return;
+
+            chosen = dialog.Selected;
+        }
+
+        _status.Text = $"Открепляю Microsoft Edge и передаю браузер {chosen.Title}...";
+        Cursor = Cursors.WaitCursor;
+        _edgeBrowser.Enabled = false;
+        Application.DoEvents();
+
+        try
+        {
+            string taskbarReport = "Microsoft Edge и так не был закреплён на панели задач.";
+            if (TaskbarPins.IsPinned(TaskbarPins.EdgeName))
+            {
+                var result = TaskbarPins.TryUnpin(TaskbarPins.EdgeName, out taskbarReport);
+
+                if (result == TaskbarResult.DoneNeedsExplorerRestart)
+                {
+                    ShellUtil.RestartExplorer();
+                    Thread.Sleep(400);
+                    Application.DoEvents();
+                    Native.RedrawDesktop();
+
+                    taskbarReport = TaskbarPins.IsPinned(TaskbarPins.EdgeName)
+                        ? "Microsoft Edge откреплён от панели задач."
+                        : "Панель задач перезапущена, Microsoft Edge откреплён.";
+                }
+            }
+
+            UpdateEdgeBrowserButtonText();
+            BrowserUtil.MakeDefault(chosen, out string browserReport);
+            _status.Text = browserReport + " " + taskbarReport;
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "Ошибка смены браузера: " + ex.Message;
+        }
+        finally
+        {
+            Cursor = Cursors.Default;
+            _edgeBrowser.Enabled = true;
+        }
+    }
+
     private void ApplyWallpaper(string? successStatus = null)
     {
         if (_chosen is null)
@@ -515,6 +596,7 @@ internal sealed class MainForm : Form
         _autoStart.Checked = AutoStart.IsEnabled;
         UpdateThemeButtonText();
         UpdateTaskbarButtonText();
+        UpdateEdgeBrowserButtonText();
 
         _status.Text = "Откат выполнен: " + report + ".";
     }
