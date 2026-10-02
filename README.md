@@ -51,6 +51,7 @@ DesktopOverlay takes a different route. Instead of fighting the shell, it draws 
 | **Clean removal** | Before the window is destroyed it repaints itself with the genuine system wallpaper, so not a single pixel of the overlay is left behind. |
 | **Light and dark** | One button switches the Windows theme to the opposite one and restarts Explorer. No dialogs, no questions — the button always says which theme it will set. |
 | **Small taskbar** | One button shrinks the taskbar from 40 to 30 pixels — the very same "Use small taskbar buttons" setting that corporate machines so often lock away in Settings. Windows 10 only: Microsoft disabled the setting in Windows 11. |
+| **Unpin Edge** | One button removes Microsoft Edge from the taskbar through the shell's own verb and hands `http`, `https`, `.htm` and `.html` to the browser you pick. Firefox sets itself automatically; Chrome and Edge open their own settings page, where you press "Set default" — since Windows 1803 the default browser cannot be changed by writing to the registry. |
 | **Autostart** | Optional. Restores the last image at logon, without showing a window. |
 | **Revert** | One action, and a written report of exactly what was restored. |
 
@@ -139,7 +140,7 @@ Four details do most of the work:
 | File | Responsibility |
 |---|---|
 | `Program.cs` | Entry point, single-instance mutex, command-line dispatch, headless tray context, log, stable image copy into `%APPDATA%`. |
-| `MainForm.cs` | The user interface: drag and drop, clipboard paste, colour presets, palette, preview, apply, revert, autostart toggle, theme switch. |
+| `MainForm.cs` | The user interface: drag and drop, clipboard paste, colour presets, palette, preview, apply, revert, autostart toggle, theme switch, unpin Edge. |
 | `ClipboardImage.cs` | Clipboard ingestion: copied image, copied file, copied folder, copied path, with retries while another application holds the clipboard. |
 | `OverlayEngine.cs` | Lifecycle of the overlay: watchdog, repaint timer, tray icon, host search, re-attach on Explorer restart, teardown. |
 | `OverlayWindow.cs` | The surface itself: window class, `WS_CHILD` attach, Z-order, `WM_PAINT` painting, *cover* scaling, clean shutdown repaint. |
@@ -148,6 +149,9 @@ Four details do most of the work:
 | `Reverter.cs` | Deterministic rollback: overlay, autostart, wallpaper override, taskbar size, saved image, theme. Also `ThemeUtil`. |
 | `TaskbarUtil.cs` | Taskbar button size: reads and writes `TaskbarSmallIcons` in `HKCU\...\Explorer\Advanced`, restores the original state, refuses to run on Windows 11. |
 | `ShellUtil.cs` | The Explorer restart, shared by the theme and the taskbar because the shell reads both settings only at startup. |
+| `BrowserUtil.cs` | Finds installed Chrome/Firefox/Edge via `App Paths` and registered `ProgId`s, reads the current default from `UserChoice`, and hands `http`, `https`, `.htm` and `.html` to the chosen browser. No direct `UserChoice` writes: Windows blocks them. |
+| `TaskbarPins.cs` | Pinning and unpinning taskbar items through the shell's `taskbarpin` / `taskbarunpin` verbs, falling back to deleting the shortcut in `Quick Launch\User Pinned\TaskBar`. |
+| `BrowserPickerForm.cs` | The picker dialog: which browser replaces Edge. Lists only browsers that are actually installed, plus the current default. |
 
 ## Safety and rollback
 
@@ -160,6 +164,8 @@ wallpaper override         Wallpaper, WallpaperStyle, TileWallpaper in HKCU\Cont
 saved image                wallpaper.* in %APPDATA%\DesktopOverlay
 taskbar size               TaskbarSmallIcons in HKCU\...\Explorer\Advanced
 light theme                restored on request only
+Edge taskbar pin           restored via the taskbarpin verb
+default browser            Edge gets http, https, .htm, .html back
 ```
 
 A domain `\\server\share` wallpaper path is recognised as policy, not as an override, and is never deleted. The desktop is redrawn, and the action is written to the log together with a human-readable report.

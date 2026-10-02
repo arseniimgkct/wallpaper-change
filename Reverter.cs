@@ -35,6 +35,13 @@ internal static class Reverter
                 done.Add("светлая тема восстановлена");
         }
 
+        if (RestoreEdge())
+        {
+            done.Add("Edge возвращён на панель задач и как браузер по умолчанию");
+            ShellUtil.RestartExplorer();
+            Thread.Sleep(400);
+        }
+
         if (DeleteSavedImage())
             done.Add("копия картинки удалена");
 
@@ -43,6 +50,36 @@ internal static class Reverter
         var report = string.Join(", ", done);
         Program.Log("откат: " + report);
         return report;
+    }
+
+    /// <summary>Возвращает Edge на панель задач и как браузер по умолчанию.</summary>
+    private static bool RestoreEdge()
+    {
+        bool changed = false;
+
+        if (!TaskbarPins.IsPinned(TaskbarPins.EdgeName) && TaskbarPins.TryPin(TaskbarPins.EdgeName, out _))
+            changed = true;
+
+        if (BrowserUtil.CurrentKind() != BrowserKind.Edge)
+        {
+            var edge = BrowserUtil.Detect(BrowserKind.Edge);
+            if (edge is null)
+            {
+                Program.Log("откат: Edge не установлен, браузер по умолчанию не трогаем");
+            }
+            else if (BrowserUtil.MakeDefault(edge, out string report))
+            {
+                Program.Log("откат: Edge снова браузер по умолчанию");
+                changed = true;
+            }
+            else
+            {
+                Program.Log("откат: Edge не удалось вернуть браузером по умолчанию: " + report);
+            }
+        }
+
+        Program.Log("откат Edge: " + (changed ? "восстановлено" : "изменений не потребовалось"));
+        return changed;
     }
 
     private static bool ClearWallpaperOverride()

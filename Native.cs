@@ -256,4 +256,5 @@ internal static class Native
         DwmSetWindowAttribute(hwnd, 20, ref trueValue, sizeof(int));
         DwmSetWindowAttribute(hwnd, 19, ref trueValue, sizeof(int));
     }
-}
+
+    }
