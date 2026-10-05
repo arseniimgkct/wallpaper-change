@@ -1,0 +1,56 @@
+[package]
+name = "desktop-overlay"
+version = "1.2.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Ставит картинку или сплошной цвет на рабочий стол поверх системных обоев под ярлыками и панелью задач."
+license = "MIT"
+publish = false
+
+[package.metadata.winresource]
+icon = "app.ico"
+
+[[bin]]
+name = "DesktopOverlay"
+path = "src/main.rs"
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "bmp",
+    "gif",
+    "tiff",
+] }
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_DataExchange",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_UI_Controls_Dialogs",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+winres = "0.1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
