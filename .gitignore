@@ -151,3 +151,10 @@ Icon?
 *.publishsettings
 *.pubxml
 appsettings.*.local.json
+
+# Rust / Cargo
+target/
+
+# Tracked release binary
+!bin/
+!bin/DesktopOverlay.exe

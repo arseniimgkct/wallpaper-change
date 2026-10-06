@@ -1,0 +1,51 @@
+[package]
+name = "desktop_overlay"
+version = "1.0.0"
+edition = "2021"
+authors = ["DesktopOverlay Team"]
+description = "High-performance Desktop Overlay for Windows behind desktop icons"
+
+[[bin]]
+name = "DesktopOverlay"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.31", default-features = true }
+egui = "0.31"
+image = { version = "0.25", features = ["jpeg", "png", "bmp", "gif", "webp", "tiff"] }
+arboard = "3.4"
+rfd = "0.15"
+tray-icon = "0.19"
+chrono = "0.4"
+lazy_static = "1.5"
+
+[dependencies.windows]
+version = "0.58"
+features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_System_SystemInformation",
+    "Win32_UI_Shell",
+    "Win32_UI_Controls",
+    "Win32_UI_Controls_Dialogs",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_IO",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+]
+
+[build-dependencies]
+winres = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,0 +1,9 @@
+pub mod autostart;
+pub mod browser;
+pub mod clipboard;
+pub mod color_picker;
+pub mod paths;
+pub mod revert;
+pub mod taskbar;
+pub mod theme;
+pub mod wallpaper_store;
