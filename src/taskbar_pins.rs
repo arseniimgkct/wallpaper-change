@@ -58,7 +58,7 @@ pub fn try_unpin(item_name: &str) -> (TaskbarResult, String) {
     }
 
     let via_verb = invoke_taskbar_verb(item_name, UNPIN_VERB, &UNPIN_HINTS);
-    program::log(&format!(
+    program::log(format!(
         "Панель задач: попытка открепить «{item_name}», глагол={}",
         if via_verb { "сработал" } else { "не найден" }
     ));
@@ -71,13 +71,13 @@ pub fn try_unpin(item_name: &str) -> (TaskbarResult, String) {
     if let Some(shortcut) = find_pinned_shortcut(item_name) {
         match std::fs::remove_file(&shortcut) {
             Ok(()) => {
-                program::log(&format!("Панель задач: ярлык «{item_name}» удалён напрямую"));
+                program::log(format!("Панель задач: ярлык «{item_name}» удалён напрямую"));
                 return (
                     TaskbarResult::DoneNeedsExplorerRestart,
                     format!("«{item_name}» откреплён от панели задач."),
                 );
             }
-            Err(e) => program::log(&format!("ошибка удаления ярлыка панели задач: {e}")),
+            Err(e) => program::log(format!("ошибка удаления ярлыка панели задач: {e}")),
         }
     }
 
@@ -101,7 +101,7 @@ pub fn try_pin(item_name: &str) -> (bool, String) {
     }
 
     let via_verb = invoke_taskbar_verb(item_name, PIN_VERB, &PIN_HINTS);
-    program::log(&format!(
+    program::log(format!(
         "Панель задач: попытка закрепить «{item_name}», глагол={}",
         if via_verb { "сработал" } else { "не найден" }
     ));
@@ -138,7 +138,7 @@ fn invoke_taskbar_verb_impl(item_name: &str, canonical_verb: &str, display_hints
         let shell: IShellDispatch = match CoCreateInstance(&Shell, None, CLSCTX_ALL) {
             Ok(shell) => shell,
             Err(e) => {
-                program::log(&format!("Панель задач: не удалось подключиться к оболочке: {e}"));
+                program::log(format!("Панель задач: не удалось подключиться к оболочке: {e}"));
                 return false;
             }
         };
@@ -148,7 +148,7 @@ fn invoke_taskbar_verb_impl(item_name: &str, canonical_verb: &str, display_hints
         let folder = match shell.NameSpace(&namespace) {
             Ok(folder) => folder,
             Err(e) => {
-                program::log(&format!("Панель задач: нет доступа к меню «Пуск»: {e}"));
+                program::log(format!("Панель задач: нет доступа к меню «Пуск»: {e}"));
                 return false;
             }
         };
@@ -169,7 +169,7 @@ fn invoke_taskbar_verb_impl(item_name: &str, canonical_verb: &str, display_hints
 
             match invoke_verb(&item, canonical_verb) {
                 Ok(()) => return true,
-                Err(e) => program::log(&format!(
+                Err(e) => program::log(format!(
                     "Панель задач: глагол {canonical_verb} для «{name}» недоступен ({e})"
                 )),
             }

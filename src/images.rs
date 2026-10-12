@@ -1,5 +1,5 @@
 //! Работа с картинками: загрузка, сохранение, превью и масштабирование «по
-//! размеру окна» так же, как это делал GDI+ в оригинале.
+//! размеру окна» с обрезкой лишнего.
 
 use std::path::{Path, PathBuf};
 
@@ -19,7 +19,7 @@ pub struct Wallpaper {
 impl Wallpaper {
     /// Готовит картинку под размер окна: вписывает с обрезкой (cover) и
     /// растягивает с бикубической фильтрацией — как `HighQualityBicubic` в
-    /// GDI+; ближайший фильтр в `image` — CatmullRom.
+    /// бикубической фильтрацией; ближайший фильтр в `image` — CatmullRom.
     pub fn scaled_to(source: &DynamicImage, width: i32, height: i32) -> Option<Wallpaper> {
         if width <= 0 || height <= 0 {
             return None;
@@ -31,7 +31,7 @@ impl Wallpaper {
         let target_w = ((src_w as f64 * scale).round() as u32).max(1);
         let target_h = ((src_h as f64 * scale).round() as u32).max(1);
 
-        // Обрезаем лишнее по центру: так «cover» и ведёт себя GDI+.
+        // Обрезаем лишнее по центру — так же, как это делает *cover*.
         let scaled = source.resize_exact(target_w, target_h, FilterType::CatmullRom);
 
         // Если картинка уже точно по размеру окна, обрезки не будет.
@@ -161,11 +161,10 @@ pub fn delete_saved_images() -> bool {
     let mut removed = false;
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-        if name.starts_with("wallpaper.") {
-            if std::fs::remove_file(entry.path()).is_ok() {
+        if name.starts_with("wallpaper.")
+            && std::fs::remove_file(entry.path()).is_ok() {
                 removed = true;
             }
-        }
     }
     removed
 }

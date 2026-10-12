@@ -4,6 +4,9 @@
 //! Проводник периодически пересоздаёт свои окна, поэтому оверлей приходится
 //! возвращать на место: этим занимается сторожевой таймер.
 
+use std::thread;
+use std::time::Duration;
+
 use image::DynamicImage;
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
@@ -17,7 +20,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::PCWSTR;
 
-use crate::app;
 use crate::native;
 use crate::overlay::OverlayWindow;
 use crate::program::{self, utf16_with_nul};
@@ -40,36 +42,70 @@ pub const MENU_REVERT: usize = 1003;
 pub const MENU_EXIT: usize = 1004;
 
 /// Движок оверлея.
+///
+/// Движок ничего не знает про `app`: картинку и текст ошибки он держит сам и
+/// отдаёт наружу результатом. Иначе он ходил бы в состояние приложения изнутри
+/// `app::with_app`, а тот берёт `RefCell` — повторный заём паниковал бы.
 pub struct OverlayEngine {
     /// Окно, получающее таймеры и сообщения от значка в трее.
     owner: HWND,
+    /// Картинка, которую показывает оверлей. Нужна сторожевому таймеру, который
+    /// пересоздаёт окно после перезапуска Проводника.
+    image: Option<DynamicImage>,
     window: Option<OverlayWindow>,
     tray: Option<TrayIcon>,
     watchdog: Option<usize>,
     repaint: Option<usize>,
     applied: bool,
+    /// Последняя ошибка, которую движок записал для показа в окне утилиты.
+    last_error: Option<String>,
     /// Последний известный размер основного монитора: по нему ловим смену
     /// разрешения, не подписываясь на системные события.
     last_screen: RECT,
+}
+
+/// Что пользователь выбрал в меню трея.
+///
+/// Движок только сообщает намерение, а выполняет его вызывающий — иначе он снова
+/// полез бы в `app::with_app` изнутри уже занятого `RefCell`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrayCommand {
+    /// Меню закрыто без выбора.
+    None,
+    ShowWindow,
+    /// Откатить и закрыть приложение.
+    Revert,
+    Exit,
 }
 
 impl OverlayEngine {
     pub fn new(owner: HWND) -> OverlayEngine {
         OverlayEngine {
             owner,
+            image: None,
             window: None,
             tray: None,
             watchdog: None,
             repaint: None,
             applied: false,
+            last_error: None,
             last_screen: program::primary_screen_rect(),
         }
     }
 
-    /// Ставит картинку на рабочий стол. `true`, если оверлей действительно встал.
+    /// Запоминает картинку для оверлея.
+    pub fn set_image(&mut self, image: DynamicImage) {
+        self.image = Some(image);
+    }
+
+    /// Забирает последнюю ошибку, чтобы показать её в окне утилиты.
     ///
-    /// Картинку кладёт вызывающий: движок берёт её из состояния приложения, чтобы
-    /// сторожевой таймер мог пересоздать окно после перезапуска Проводника.
+    /// Забирать нужно *после* выхода из `app::with_app`.
+    pub fn take_error(&mut self) -> Option<String> {
+        self.last_error.take()
+    }
+
+    /// Ставит картинку на рабочий стол. `true`, если оверлей действительно встал.
     pub fn apply(&mut self, show_tray: bool) -> bool {
         self.remove();
 
@@ -114,6 +150,10 @@ impl OverlayEngine {
         }
 
         if shown {
+            // Пауза перед прокачкой обязательна: системные обои успевают
+            // декодироваться и вписываются в окно. Без неё окно закрывается
+            // раньше, чем перерисуется, и под ним остаётся серая дыра.
+            thread::sleep(Duration::from_millis(150));
             pump_messages();
         }
 
@@ -126,11 +166,6 @@ impl OverlayEngine {
     /// Оверлей жив и встроен в рабочий стол.
     pub fn is_healthy(&self) -> bool {
         self.window.as_ref().is_some_and(OverlayWindow::is_still_attached)
-    }
-
-    /// Оверлей установлен, но окно потерялось.
-    pub fn is_applied(&self) -> bool {
-        self.applied
     }
 
     /// Тик таймера: сторож и перерисовка.
@@ -146,28 +181,27 @@ impl OverlayEngine {
         }
     }
 
-    /// Обрабатывает нажатие значка в трее. `true`, если приложение завершено.
-    pub fn on_tray_message(&mut self, lparam: LPARAM) -> bool {
+    /// Обрабатывает нажатие значка в трее и возвращает, что нужно сделать.
+    pub fn on_tray_message(&mut self, lparam: LPARAM) -> TrayCommand {
         // Меню показываем по правому клику или по нажатию средней кнопки.
         let event = lparam.0 as u32;
         const WM_RBUTTONUP: u32 = 0x0205;
         const WM_CONTEXTMENU: u32 = 0x007B;
 
         if event != WM_RBUTTONUP && event != WM_CONTEXTMENU {
-            return false;
+            return TrayCommand::None;
         }
 
         match self.show_tray_menu() {
-            Some(MENU_SHOW) => {
-                app::show_main_window();
+            Some(MENU_SHOW) => TrayCommand::ShowWindow,
+            Some(MENU_REATTACH) => {
+                self.ensure_overlay(true);
+                TrayCommand::None
             }
-            Some(MENU_REATTACH) => self.ensure_overlay(true),
-            Some(MENU_REVERT) => return app::revert_from_tray(),
-            Some(MENU_EXIT) => app::exit_application(),
-            _ => {}
+            Some(MENU_REVERT) => TrayCommand::Revert,
+            Some(MENU_EXIT) => TrayCommand::Exit,
+            _ => TrayCommand::None,
         }
-
-        false
     }
 
     /// Показывает контекстное меню значка и возвращает выбранный пункт.
@@ -243,13 +277,14 @@ impl OverlayEngine {
     }
 
     fn recreate(&mut self, reason: &str) {
-        program::log(&format!("пересоздание оверлея: {reason}"));
+        program::log(format!("пересоздание оверлея: {reason}"));
 
         // Старое окно закрываем до создания нового: иначе на экране окажется
         // две копии картинки.
         self.window = None;
 
-        let Some(image) = load_overlay_image() else {
+        let Some(image) = self.image.clone() else {
+            self.last_error = Some("Картинка для оверлея не задана".to_string());
             return;
         };
 
@@ -257,7 +292,7 @@ impl OverlayEngine {
             Some(window) => self.window = Some(window),
             None => {
                 program::log("не удалось прикрепиться");
-                app::set_status("Не удалось встроить окно в рабочий стол");
+                self.last_error = Some("Не удалось встроить окно в рабочий стол".to_string());
             }
         }
     }
@@ -287,12 +322,6 @@ impl Drop for OverlayEngine {
         self.stop_timers();
         self.destroy_tray();
     }
-}
-
-/// Картинка для оверлея берётся из состояния приложения: её кладёт туда
-/// вызов «Установить обои» или автозапуск.
-fn load_overlay_image() -> Option<DynamicImage> {
-    app::overlay_image()
 }
 
 /// Значок в системном трее.
@@ -417,11 +446,3 @@ pub fn pump_messages() {
     PUMPING.with(|pumping| pumping.set(false));
 }
 
-/// `true`, если сейчас выполняется прокачка сообщений.
-pub fn is_pumping() -> bool {
-    use std::cell::Cell;
-    thread_local! {
-        static PUMPING: Cell<bool> = const { Cell::new(false) };
-    }
-    PUMPING.with(|pumping| pumping.get())
-}

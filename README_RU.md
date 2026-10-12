@@ -5,7 +5,7 @@
 ### Слой обоев, который живёт выше системных обоев — и ниже всего остального.
 
 <p align="center">
-  <img src="https://img.shields.io/badge/.NET-8.0-512BD4?style=flat-square&labelColor=0F1419" alt=".NET 8.0" />
+  <img src="https://img.shields.io/badge/Rust-stable-512BD4?style=flat-square&labelColor=0F1419" alt="Rust" />
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4?style=flat-square&labelColor=0F1419" alt="Windows 10 | 11" />
   <img src="https://img.shields.io/badge/архитектура-x64-D4D4D4?style=flat-square&labelColor=0F1419" alt="x64" />
   <img src="https://img.shields.io/badge/дистрибутив-один%20EXE-2D8C3F?style=flat-square&labelColor=0F1419" alt="Single file EXE" />
@@ -59,23 +59,28 @@ DesktopOverlay идёт другим путём. Вместо борьбы с о
 
 ```
 Операционная система   Windows 10 или Windows 11, x64
-Среда выполнения       .NET 8 Desktop Runtime либо самостоятельная сборка из репозитория
+Среда выполнения       Не требуется. На выходе один исполняемый файл.
+Инструменты сборки     Rust (stable) и MSVC Build Tools
 Права                  Не требуются. Всё происходит в сессии текущего пользователя.
 ```
 
 ## Сборка
 
+Rust ставится скриптом из репозитория — он же проверяет наличие MSVC:
+
 ```powershell
 git clone <адрес-репозитория>
 cd DesktopOverlay
-dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+
+powershell -ExecutionPolicy Bypass -File scripts\install-rust.ps1
+cargo build --release
 ```
 
-На выходе один самодостаточный исполняемый файл. Ничего ставить, ничего рядом не класть.
+На выходе один самодостаточный графический исполняемый файл: без окна консоли, ничего ставить не нужно, ничего рядом класть не нужно. Диагностика пишется в `%APPDATA%\DesktopOverlay\overlay.log`.
 
 ```powershell
 # запуск
-.\bin\Release\net8.0-windows\win-x64\publish\DesktopOverlay.exe
+.\target\release\DesktopOverlay.exe
 ```
 
 ## Использование
@@ -139,19 +144,26 @@ Progman
 
 | Файл | Ответственность |
 |---|---|
-| `Program.cs` | Точка входа, мьютекс единственного экземпляра, разбор командной строки, безоконный трей-контекст, логирование, стабильная копия картинки в `%APPDATA%`. |
-| `MainForm.cs` | Интерфейс: drag and drop, вставка из буфера, пресеты цветов, палитра, предпросмотр, применение, откат, автозапуск, переключение темы, открепление Edge. |
-| `ClipboardImage.cs` | Работа с буфером обмена: скопированная картинка, файл, папка или путь, с повторами, пока буфер занят другим приложением. |
-| `OverlayEngine.cs` | Жизненный цикл оверлея: сторожевой таймер, таймер перерисовки, значок в трее, поиск хоста, повторное прикрепление после перезапуска Проводника, снятие. |
-| `OverlayWindow.cs` | Сама поверхность: класс окна, прикрепление как `WS_CHILD`, Z-order, отрисовка в `WM_PAINT`, масштабирование *cover*, перерисовка системными обоями при закрытии. |
-| `Native.cs` | Слой P/Invoke: `EnumWindows`, `FindWindowEx`, `CreateWindowEx`, `SetWindowPos`, `RedrawWindow`, а также поиск `WorkerW` и атрибут тёмного режима DWM. |
-| `AutoStart.cs` | Автозапуск через `HKCU\...\CurrentVersion\Run` с полезной нагрузкой `--apply`. |
-| `Reverter.cs` | Детерминированный откат: оверлей, автозапуск, переопределение обоев, размер панели задач, сохранённая картинка, тема. Там же `ThemeUtil`. |
-| `TaskbarUtil.cs` | Размер кнопок панели задач: чтение и запись `TaskbarSmallIcons` в `HKCU\...\Explorer\Advanced`, восстановление исходного состояния, отказ на Windows 11. |
-| `ShellUtil.cs` | Перезапуск Проводника — общий для темы и панели задач, потому что оба параметра читаются оболочкой только при старте. |
-| `BrowserUtil.cs` | Определение установленных Chrome/Firefox/Edge по `App Paths` и зарегистрированным `ProgId`, чтение текущего браузера по умолчанию из `UserChoice`, передача `http`, `https`, `.htm`, `.html` выбранному браузеру. Прямая запись в `UserChoice` не используется: Windows её блокирует. |
-| `TaskbarPins.cs` | Закрепление и открепление значков панели задач через глагол оболочки `taskbarpin` / `taskbarunpin`, с запасным удалением ярлыка из `Quick Launch\User Pinned\TaskBar`. |
-| `BrowserPickerForm.cs` | Диалог выбора: кем заменить Edge. Показывает только реально установленные браузеры и текущий браузер по умолчанию. |
+| `main.rs` | Точка входа: графическая подсистема, DPI, мьютекс единственного экземпляра, разбор командной строки. |
+| `program.rs` | Пути, логирование, разбор аргументов, обёртка над реестром, оконные помощники. |
+| `app.rs` | Общее состояние приложения, цикл сообщений, время жизни окон, режим только-трей. |
+| `ui/main_form.rs` | Интерфейс: drag and drop, вставка из буфера, пресеты цветов, палитра, предпросмотр, применение, откат, автозапуск, переключение темы, открепление Edge. |
+| `ui/browser_picker.rs` | Диалог выбора: кем заменить Edge, со своим циклом сообщений. |
+| `ui/dialogs.rs` | Диалоги Windows: открытие файла, палитра, сообщения. |
+| `ui/controls.rs` | Модель элементов управления для обоих окон, включая кешированный предпросмотр *cover*. |
+| `ui/paint.rs` | Слой над GDI: кисти, шрифты, вывод текста, отрисовка кнопок и флажка, масштабирование под DPI. |
+| `ui/tooltip.rs` | Окно всплывающей подсказки: показывается с задержкой и позиционируется в экранных координатах. |
+| `clipboard.rs` | Работа с буфером обмена: скопированная картинка, файл, папка или путь, с повторами, пока буфер занят другим приложением. |
+| `engine.rs` | Жизненный цикл оверлея: сторожевой таймер, таймер перерисовки, значок в трее и меню, повторное прикрепление после перезапуска Проводника, снятие. |
+| `overlay.rs` | Сама поверхность: класс окна, прикрепление как `WS_CHILD`, Z-order, отрисовка в `WM_PAINT`, масштабирование *cover*, перерисовка системными обоями при закрытии. |
+| `native.rs` | Слой над Win32: `EnumWindows`, `FindWindowEx`, `SetWindowPos`, `RedrawWindow`, а также поиск `WorkerW` и атрибут тёмного режима DWM. |
+| `theme.rs` | Чтение и запись темы Windows, автозапуск через `HKCU\...\CurrentVersion\Run` с полезной нагрузкой `--apply`. |
+| `reverter.rs` | Детерминированный откат: оверлей, автозапуск, переопределение обоев, размер панели задач, сохранённая картинка, тема. |
+| `taskbar.rs` | Размер кнопок панели задач: чтение и запись `TaskbarSmallIcons` в `HKCU\...\Explorer\Advanced`, восстановление исходного состояния, отказ на Windows 11. |
+| `shell.rs` | Перезапуск Проводника — общий для темы и панели задач, потому что оба параметра читаются оболочкой только при старте. |
+| `browser.rs` | Определение установленных Chrome/Firefox/Edge по `App Paths` и зарегистрированным `ProgId`, чтение текущего браузера по умолчанию из `UserChoice`, передача `http`, `https`, `.htm`, `.html` выбранному браузеру. Прямая запись в `UserChoice` не используется: Windows её блокирует. |
+| `taskbar_pins.rs` | Закрепление и открепление значков панели задач через глагол оболочки `taskbarpin` / `taskbarunpin`, с запасным удалением ярлыка из `Quick Launch\User Pinned\TaskBar`. |
+| `images.rs` | Декодирование, масштабирование *cover* в BGRA, генерация сплошного цвета, стабильные копии в `%APPDATA%`. |
 
 ## Безопасность и откат
 
@@ -202,6 +214,6 @@ MIT.
 
 <div align="center">
 
-<p align="center"><sub>DesktopOverlay &nbsp;&middot;&nbsp; .NET 8 &nbsp;&middot;&nbsp; Windows 10 / 11 x64 &nbsp;&middot;&nbsp; MIT</sub></p>
+<p align="center"><sub>DesktopOverlay &nbsp;&middot;&nbsp; Rust &nbsp;&middot;&nbsp; Windows 10 / 11 x64 &nbsp;&middot;&nbsp; MIT</sub></p>
 
 </div>

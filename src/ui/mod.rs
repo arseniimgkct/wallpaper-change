@@ -5,3 +5,4 @@ pub mod controls;
 pub mod dialogs;
 pub mod main_form;
 pub mod paint;
+pub mod tooltip;

@@ -52,14 +52,6 @@ impl BrowserKind {
             BrowserKind::Edge => "MSEdgeHTM",
         }
     }
-
-    fn html_prog_id_prefix(self) -> &'static str {
-        match self {
-            BrowserKind::Chrome => "ChromeHTML",
-            BrowserKind::Firefox => "FirefoxHTML",
-            BrowserKind::Edge => "MSEdgeHTM",
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -67,8 +59,6 @@ pub struct BrowserInfo {
     pub kind: BrowserKind,
     pub title: String,
     pub exe_path: PathBuf,
-    pub url_prog_id: String,
-    pub html_prog_id: String,
 }
 
 /// Список всех классов реестра. Читается один раз за время работы процесса.
@@ -89,15 +79,12 @@ fn class_names() -> &'static [String] {
 pub fn detect(kind: BrowserKind) -> Option<BrowserInfo> {
     let exe_path = find_app_path(kind.exe_name())?;
 
-    Some(BrowserInfo {
-        kind,
-        title: kind.title().to_string(),
-        exe_path,
-        url_prog_id: resolve_prog_id(kind.url_prog_id_prefix())
-            .unwrap_or_else(|| format!("{}.x", kind.url_prog_id_prefix())),
-        html_prog_id: resolve_prog_id(kind.html_prog_id_prefix())
-            .unwrap_or_else(|| format!("{}.x", kind.html_prog_id_prefix())),
-    })
+    // Зарегистрированный обработчик нужен, чтобы убедиться, что браузер
+    // действительно умеет открывать ссылки, а не просто установлен.
+    let _handler = resolve_prog_id(kind.url_prog_id_prefix())
+        .unwrap_or_else(|| format!("{}.x", kind.url_prog_id_prefix()));
+
+    Some(BrowserInfo { kind, title: kind.title().to_string(), exe_path })
 }
 
 /// Chrome и Firefox, которые реально установлены.
@@ -150,7 +137,7 @@ pub fn make_default(browser: &BrowserInfo) -> (bool, String) {
              «Параметры → Приложения → Веб-браузер по умолчанию» и выберите {}.",
             browser.title
         );
-        program::log(&format!(
+        program::log(format!(
             "Браузер по умолчанию: {} не смог назначить себя сам, нужны Параметры",
             browser.title
         ));
@@ -166,7 +153,7 @@ pub fn make_default(browser: &BrowserInfo) -> (bool, String) {
     }
 
     let done = current_kind() == Some(browser.kind);
-    program::log(&format!(
+    program::log(format!(
         "Браузер по умолчанию: запрошен {}, подтверждено {}",
         browser.title,
         if done { "да" } else { "нет" }

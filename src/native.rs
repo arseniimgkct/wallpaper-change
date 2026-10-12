@@ -1,4 +1,4 @@
-//! Обёртки над Win32, которые использовались из C# без посредников.
+//! Обёртки над Win32: поиск окна рабочего стола, перерисовка, тёмный режим.
 
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -134,15 +134,6 @@ pub fn get_window_rect(hwnd: HWND) -> Option<RECT> {
     Some(rect)
 }
 
-/// Размер клиентской области окна.
-pub fn client_size(hwnd: HWND) -> (i32, i32) {
-    let mut rect = RECT::default();
-    unsafe {
-        let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut rect);
-    }
-    (rect.right - rect.left, rect.bottom - rect.top)
-}
-
 /// Включает тёмное оформление заголовка окна (DWM).
 pub fn enable_dark_mode_for_window(hwnd: HWND) {
     use windows::Win32::Graphics::Dwm::{
@@ -159,7 +150,7 @@ pub fn enable_dark_mode_for_window(hwnd: HWND) {
         for attribute in [USE_IMMERSIVE_DARK_MODE, USE_IMMERSIVE_DARK_MODE_OLD] {
             let _ = DwmSetWindowAttribute(
                 hwnd,
-                DWMWINDOWATTRIBUTE(attribute as i32),
+                DWMWINDOWATTRIBUTE(attribute),
                 (&on as *const i32).cast(),
                 std::mem::size_of::<i32>() as u32,
             );

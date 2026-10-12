@@ -47,7 +47,7 @@ pub fn set_small(small: bool) -> bool {
     }
 
     let applied = key.get_flag(VALUE_NAME) == Some(small);
-    program::log(&format!(
+    program::log(format!(
         "Панель задач: запрошена {}, подтверждена {}",
         if small { "маленькая" } else { "обычная" },
         if applied { "да" } else { "нет" }

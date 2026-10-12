@@ -154,3 +154,6 @@ Icon?
 *.publishsettings
 *.pubxml
 appsettings.*.local.json
+
+# Локальные настройки агента
+.opencode/

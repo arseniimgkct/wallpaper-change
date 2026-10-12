@@ -1,6 +1,5 @@
 //! Переключение темы оформления Windows и автозапуск.
 
-use std::path::PathBuf;
 
 use crate::program::{self, RegKey};
 
@@ -13,12 +12,6 @@ pub enum WindowsTheme {
 }
 
 impl WindowsTheme {
-    pub fn title(self) -> &'static str {
-        match self {
-            WindowsTheme::Light => "Светлая",
-            WindowsTheme::Dark => "Тёмная",
-        }
-    }
 }
 
 /// Текущая тема Windows: `None`, если ветка реестра недоступна.
@@ -62,7 +55,7 @@ pub fn set_theme(dark: bool) -> bool {
     key.set_dword("SystemUsesLightTheme", value);
 
     let applied = read_theme() == Some(target);
-    program::log(&format!(
+    program::log(format!(
         "Тема Windows: запрошена {}, подтверждена {}",
         if dark { "тёмная" } else { "светлая" },
         if applied { "да" } else { "нет" }
@@ -72,10 +65,6 @@ pub fn set_theme(dark: bool) -> bool {
 
 pub fn set_light() -> bool {
     set_theme(false)
-}
-
-pub fn set_dark() -> bool {
-    set_theme(true)
 }
 
 /// Меняет тему и перезапускает проводник, если это действительно нужно.
@@ -143,7 +132,3 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Путь к сохранённой копии картинки, если она пригодна для автозапуска.
-pub fn autostart_image() -> Option<PathBuf> {
-    program::saved_wallpaper_path().filter(|p| p.is_file())
-}

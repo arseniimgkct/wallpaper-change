@@ -30,8 +30,6 @@ pub enum Action {
     DetachEdge,
     /// Включение и выключение автозапуска.
     ToggleAutoStart,
-    /// Закрытие окна диалога выбора браузера.
-    ClosePicker,
 }
 
 #[derive(Debug, Clone)]
@@ -74,12 +72,14 @@ pub enum Control {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LabelColor {
-    Primary,
     Muted,
     Dim,
 }
 
 impl Control {
+    /// Логический прямоугольник элемента: раскладка задана в координатах
+    /// 96 dpi, масштаб под экран применяется при отрисовке и при проверке
+    /// попадания мыши.
     pub fn rect(&self) -> RECT {
         match self {
             Control::Button { rect, .. }
@@ -90,8 +90,24 @@ impl Control {
         }
     }
 
-    pub fn contains(&self, x: i32, y: i32) -> bool {
-        paint::contains(self.rect(), x, y)
+    /// Текст подсказки для этого элемента, если он задан.
+    pub fn tooltip(&self) -> Option<&str> {
+        match self {
+            Control::Button { tooltip, .. } | Control::ColorSwatch { tooltip, .. } => {
+                tooltip.as_deref()
+            }
+            _ => None,
+        }
+    }
+
+
+    /// Прямоугольник элемента в пикселях окна.
+    ///
+    /// Раскладка задана в логических координатах (как в оригинале на 96 dpi),
+    /// поэтому масштаб под экран применяется здесь — и в отрисовке, и в
+    /// проверке попадания мыши, иначе кнопки не совпали бы с картинкой.
+    pub fn scaled_rect(&self, dpi: i32) -> RECT {
+        paint::scale_rect(self.rect(), dpi)
     }
 
     /// Нажимается ли элемент в текущем состоянии.
@@ -113,15 +129,6 @@ impl Control {
         }
     }
 
-    pub fn tooltip(&self) -> Option<&str> {
-        match self {
-            Control::Button { tooltip, .. } | Control::ColorSwatch { tooltip, .. } => {
-                tooltip.as_deref()
-            }
-            _ => None,
-        }
-    }
-
     /// Отрисовка элемента.
     pub fn paint(
         &self,
@@ -130,9 +137,11 @@ impl Control {
         pressed: bool,
         state: &ControlState<'_>,
     ) {
+        let dpi = painter.dpi();
+
         match self {
             Control::Button { rect, text, primary, enabled, points, .. } => painter.button(
-                *rect,
+                paint::scale_rect(*rect, dpi),
                 text,
                 *primary,
                 hovered,
@@ -141,21 +150,25 @@ impl Control {
                 *points,
                 *primary,
             ),
-            Control::ColorSwatch { rect, color, .. } => painter.color_swatch(*rect, *color),
-            Control::Checkbox { rect, text, checked, .. } => {
-                painter.checkbox(*rect, text, *checked, hovered)
+            Control::ColorSwatch { rect, color, .. } => {
+                painter.color_swatch(paint::scale_rect(*rect, dpi), *color)
             }
-            Control::DropZone { rect } => state.draw_drop_zone(*rect, painter),
+            Control::Checkbox { rect, text, checked, .. } => {
+                painter.checkbox(paint::scale_rect(*rect, dpi), text, *checked, hovered)
+            }
+            Control::DropZone { rect } => {
+                state.draw_drop_zone(paint::scale_rect(*rect, dpi), painter)
+            }
             Control::Label { rect, text, points, color, bold } => {
                 let color = match color {
-                    LabelColor::Primary => painter.text_primary(),
                     LabelColor::Muted => painter.text_muted(),
                     LabelColor::Dim => painter.text_dim(),
                 };
+                let rect = paint::scale_rect(*rect, dpi);
                 if *bold {
-                    painter.label_bold(*rect, text, *points, color);
+                    painter.label_bold(rect, text, *points, color);
                 } else {
-                    painter.label(*rect, text, *points, color);
+                    painter.label(rect, text, *points, color);
                 }
             }
         }
@@ -164,12 +177,10 @@ impl Control {
 
 /// Данные, нужные окну при отрисовке, но не входящие в сами элементы.
 pub struct ControlState<'a> {
-    /// Превью выбранной картинки.
-    pub preview: Option<&'a image::DynamicImage>,
+    /// Превью выбранной картинки, уже пересчитанное в BGRA.
+    pub preview: Option<&'a Preview>,
     /// Показывать подсказку вместо картинки.
     pub hint_visible: bool,
-    /// Фон окна.
-    pub background: COLORREF,
     /// Цвет рамки зоны перетаскивания.
     pub drop_border: COLORREF,
 }
@@ -180,7 +191,7 @@ impl ControlState<'_> {
         painter.surface(rect);
 
         if let Some(preview) = self.preview {
-            draw_image_cover(painter, rect, preview);
+            preview.blit(painter, rect);
         } else if self.hint_visible {
             painter.hint(
                 rect,
@@ -195,67 +206,88 @@ impl ControlState<'_> {
     }
 }
 
-/// Рисует картинку «по размеру окна» с обрезкой — как `PictureBoxSizeMode.Zoom`.
-fn draw_image_cover(painter: &Painter, rect: RECT, image: &image::DynamicImage) {
-    use windows::Win32::Graphics::Gdi::{
-        SetDIBitsToDevice, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
-    };
-
-    let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
-    if width <= 0 || height <= 0 {
-        return;
-    }
-
-    // Рисуем превью сразу в масштабе окна: так картинка не мылится и не тормозит.
-    let preview_width = width.min(960);
-    let preview_height = (preview_width as u64 * image.height() as u64 / image.width().max(1) as u64)
-        .max(1) as i32;
-    let preview_height = preview_height.min(height);
-
-    let resized = image.resize_exact(
-        preview_width as u32,
-        preview_height as u32,
-        image::imageops::FilterType::Triangle,
-    );
-
-    let pixels: Vec<u8> = resized
-        .to_rgba8()
-        .pixels()
-        .flat_map(|p| [p[2], p[1], p[0], p[3]])
-        .collect();
-
-    let info = BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: preview_width,
-            biHeight: -preview_height,
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: 0,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    unsafe {
-        SetDIBitsToDevice(
-            painter.hdc(),
-            rect.left,
-            rect.top,
-            preview_width as u32,
-            preview_height as u32,
-            0,
-            0,
-            0,
-            preview_height as u32,
-            pixels.as_ptr().cast(),
-            &info,
-            DIB_RGB_COLORS,
-        );
-    }
+/// Готовое превью: картинка, один раз пересчитанная в BGRA под размер окна.
+///
+/// Пересчёт на каждый кадр — самая дорогая операция в окне: картинка
+/// растягивается и переводится в BGRA заново при каждом движении мыши,
+/// из-за чего кнопки «подтормаживают» под курсором. Поэтому превью
+/// пересчитывается только когда сменилась картинка или размер окна.
+pub struct Preview {
+    bgra: Vec<u8>,
+    pub width: i32,
+    pub height: i32,
 }
 
-/// Утилита для сборки прямоугольника из логических координат.
-pub fn rect(left: i32, top: i32, width: i32, height: i32) -> RECT {
-    paint::rect(left, top, width, height)
+impl Preview {
+    /// Пересчитывает превью под размер зоны перетаскивания.
+    ///
+    /// `None`, если вписать картинку не во что: пустой прямоугольник.
+    pub fn build(image: &image::DynamicImage, rect: RECT) -> Option<Preview> {
+        let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+        if width <= 0 || height <= 0 {
+            return None;
+        }
+
+        // Держим превью не крупнее зоны: иначе на каждый кадр гоняем мегапиксели.
+        let preview_width = width.min(960);
+        let preview_height = (preview_width as u64 * image.height() as u64
+            / image.width().max(1) as u64)
+            .max(1) as i32;
+        let preview_height = preview_height.min(height);
+
+        let resized = image.resize_exact(
+            preview_width as u32,
+            preview_height as u32,
+            image::imageops::FilterType::Triangle,
+        );
+
+        let bgra = resized
+            .to_rgba8()
+            .pixels()
+            .flat_map(|p| [p[2], p[1], p[0], p[3]])
+            .collect();
+
+        Some(Preview { bgra, width: preview_width, height: preview_height })
+    }
+
+    /// Копирует превью в прямоугольник `rect`.
+    pub fn blit(&self, painter: &Painter, rect: RECT) {
+        use windows::Win32::Graphics::Gdi::{
+            SetDIBitsToDevice, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
+        };
+
+        if self.width <= 0 || self.height <= 0 {
+            return;
+        }
+
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: self.width,
+                biHeight: -self.height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        unsafe {
+            SetDIBitsToDevice(
+                painter.hdc(),
+                rect.left,
+                rect.top,
+                self.width as u32,
+                self.height as u32,
+                0,
+                0,
+                0,
+                self.height as u32,
+                self.bgra.as_ptr().cast(),
+                &info,
+                DIB_RGB_COLORS,
+            );
+        }
+    }
 }

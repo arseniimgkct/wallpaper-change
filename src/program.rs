@@ -14,7 +14,7 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClassNameW, GetWindowRect, IsWindow, SetForegroundWindow, SetWindowPos,
+    EnumWindows, GetClassNameW, GetWindowRect, SetForegroundWindow, SetWindowPos,
     ShowWindow, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_RESTORE, SW_SHOW,
 };
 use windows::core::{BOOL, PCWSTR, PWSTR};
@@ -31,11 +31,6 @@ pub const SOLID_COLOR_FILE: &str = "wallpaper.png";
 
 /// Имя файла, в который сохраняется картинка из буфера обмена.
 pub const CLIPBOARD_FILE: &str = "wallpaper.png";
-
-/// Заголовок ошибок и логов.
-pub fn app_name() -> &'static str {
-    APP_NAME
-}
 
 /// `%APPDATA%\DesktopOverlay`
 pub fn data_dir() -> PathBuf {
@@ -308,7 +303,7 @@ impl RegKey {
         let bytes = self.query_bytes(name, &mut kind)?;
 
         // REG_SZ (1), REG_EXPAND_SZ (2) и REG_NONE (0, тоже строка).
-        if !matches!(kind.0, 0 | 1 | 2) {
+        if !matches!(kind.0, 0..=2) {
             return None;
         }
 
@@ -434,27 +429,6 @@ pub fn get_registry_string(path: &str, name: &str) -> Option<String> {
     RegKey::open(path).and_then(|k| k.get_string(name))
 }
 
-pub fn set_registry_string(path: &str, name: &str, value: &str) -> bool {
-    RegKey::create(path).is_some_and(|k| k.set_string(name, value))
-}
-
-pub fn set_registry_dword(path: &str, name: &str, value: u32) -> bool {
-    RegKey::create(path).is_some_and(|k| k.set_dword(name, value))
-}
-
-pub fn delete_registry_value(path: &str, name: &str) {
-    if let Some(k) = RegKey::open(path) {
-        k.delete_value(name);
-    }
-}
-
-/// `Some(())`, если ветка существует и открывается, `None` — если нет.
-pub fn registry_key_exists(path: &str) -> Option<()> {
-    RegKey::open(path).map(|_| ())
-}
-
-/// Диалогам Windows нужны строки COM: они живут дольше вызова.
-pub use windows::core::HSTRING;
 
 /// Строка UTF-16 с завершающим нулём.
 pub fn utf16_with_nul(value: &str) -> Vec<u16> {
@@ -530,11 +504,6 @@ pub fn find_top_level_by_class(name: &str) -> Option<HWND> {
     found
 }
 
-/// `Some(окно)`, если окно всё ещё существует.
-pub fn window_alive(hwnd: HWND) -> Option<HWND> {
-    unsafe { IsWindow(Some(hwnd)).as_bool().then_some(hwnd) }
-}
-
 /// Прямоугольник основного монитора.
 ///
 /// Оверлей живёт внутри окна рабочего стола, поэтому ему нужен именно
@@ -589,7 +558,7 @@ pub fn primary_screen_rect() -> RECT {
     })
 }
 
-/// Включает режим Per-Monitor V2, как это делает WinForms при старте.
+/// Включает режим Per-Monitor V2, чтобы окно не размывалось на других экранах.
 pub fn enable_per_monitor_dpi_v2() {
     use windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2;
     unsafe {

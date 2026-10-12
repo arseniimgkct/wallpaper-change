@@ -41,7 +41,7 @@ pub fn try_take() -> Result<PathBuf, String> {
     for attempt in 1..=ATTEMPTS {
         match read_image() {
             Ok(path) => {
-                program::log(&format!(
+                program::log(format!(
                     "картинка взята из буфера обмена: {}",
                     path.display()
                 ));
@@ -62,7 +62,7 @@ pub fn try_take() -> Result<PathBuf, String> {
                     .to_string();
             }
             Err(ClipboardError::Other(error)) => {
-                program::log(&format!("ошибка чтения буфера обмена: {error}"));
+                program::log(format!("ошибка чтения буфера обмена: {error}"));
                 return Err(error);
             }
         }
@@ -306,7 +306,7 @@ fn dib_to_image(bytes: &[u8], is_v5: bool) -> Option<DynamicImage> {
     }
 
     // Длина строки в DIB всегда кратна 4 байтам.
-    let stride = ((width * bits as u32 + 31) / 32) * 4;
+    let stride = (width * bits as u32).div_ceil(32) * 4;
 
     // Палитра идёт сразу после заголовка и есть только у 1/4/8-битных картинок.
     let palette_start = std::mem::size_of::<BITMAPINFOHEADER>();

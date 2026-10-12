@@ -11,13 +11,16 @@ use windows::Win32::UI::WindowsAndMessaging::{
     RegisterClassExW, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow, CS_HREDRAW,
     CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, IDCANCEL, IDC_HAND, MSG, SW_SHOW, SWP_NOSIZE,
     SWP_NOOWNERZORDER, WM_COMMAND, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETCURSOR, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_OVERLAPPED, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
-    WNDCLASSEXW,
+    WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETCURSOR, WM_KEYDOWN, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_OVERLAPPED, WS_POPUP, WS_SYSMENU,
+    WS_VISIBLE, WNDCLASSEXW,
 };
 use windows::core::PCWSTR;
 
+use windows::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_RETURN};
+
 use crate::browser::{self, BrowserInfo};
+use crate::native;
 use crate::program::{self, utf16_with_nul};
 use crate::ui::paint::{self, Painter};
 
@@ -231,6 +234,10 @@ pub(crate) unsafe extern "system" fn wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    if message == WM_NCCREATE {
+        native::enable_dark_mode_for_window(hwnd);
+    }
+
     match message {
         WM_PAINT => {
             paint(hwnd);
@@ -271,8 +278,7 @@ pub(crate) unsafe extern "system" fn wnd_proc(
                 state.pressed = None;
 
                 // Срабатывает только если отпустили над той же кнопкой.
-                if hit.is_some() && hit == pressed {
-                    let index = hit.unwrap();
+                if let Some(index) = hit.filter(|index| Some(*index) == pressed) {
                     state.selected = if state.is_cancel(index) { None } else { Some(index) };
                     let _ = DestroyWindow(hwnd);
                 }
@@ -296,6 +302,26 @@ pub(crate) unsafe extern "system" fn wnd_proc(
                 return LRESULT(0);
             }
         }
+
+        // Escape и Enter в WinForms доходят через `DialogResult`, здесь их
+        // ловим напрямую: `Escape` не порождает `WM_COMMAND`.
+        WM_KEYDOWN => match wparam.0 as u16 {
+            key if key == VK_ESCAPE.0 => {
+                let _ = DestroyWindow(hwnd);
+                return LRESULT(0);
+            }
+            key if key == VK_RETURN.0 => {
+                // Enter принимает первый вариант — как `AcceptButton` в оригинале.
+                if let Some(state) = state_mut(hwnd) {
+                    if !state.browsers.is_empty() {
+                        state.selected = Some(0);
+                        let _ = DestroyWindow(hwnd);
+                        return LRESULT(0);
+                    }
+                }
+            }
+            _ => {}
+        },
 
         WM_NCDESTROY => {
             let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA);

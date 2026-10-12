@@ -5,7 +5,7 @@
 ### A wallpaper layer that lives above the system wallpaper — and below everything else.
 
 <p align="center">
-  <img src="https://img.shields.io/badge/.NET-8.0-512BD4?style=flat-square&labelColor=0F1419" alt=".NET 8.0" />
+  <img src="https://img.shields.io/badge/Rust-stable-512BD4?style=flat-square&labelColor=0F1419" alt="Rust" />
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4?style=flat-square&labelColor=0F1419" alt="Windows 10 | 11" />
   <img src="https://img.shields.io/badge/architecture-x64-D4D4D4?style=flat-square&labelColor=0F1419" alt="x64" />
   <img src="https://img.shields.io/badge/distribution-single--file%20EXE-2D8C3F?style=flat-square&labelColor=0F1419" alt="Single file EXE" />
@@ -59,23 +59,28 @@ DesktopOverlay takes a different route. Instead of fighting the shell, it draws 
 
 ```
 Operating system   Windows 10 or Windows 11, x64
-Runtime            .NET 8 Desktop Runtime, or the bundled self-contained build
+Runtime            None required. The build produces a single executable.
+Build tools        Rust (stable) and MSVC Build Tools
 Privileges         None. Everything happens in the current user's own session.
 ```
 
 ## Building
 
+Rust is installed by the bundled script, which also checks for MSVC:
+
 ```powershell
 git clone <repository-url>
 cd DesktopOverlay
-dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+
+powershell -ExecutionPolicy Bypass -File scripts\install-rust.ps1
+cargo build --release
 ```
 
-The result is a single self-contained executable. Nothing to install, nothing to copy alongside it.
+The result is a single self-contained GUI executable: no console window, no runtime to install, nothing to copy alongside it. Diagnostics go to `%APPDATA%\DesktopOverlay\overlay.log`.
 
 ```powershell
 # run
-.\bin\Release\net8.0-windows\win-x64\publish\DesktopOverlay.exe
+.\target\release\DesktopOverlay.exe
 ```
 
 ## Using it
@@ -139,19 +144,26 @@ Four details do most of the work:
 
 | File | Responsibility |
 |---|---|
-| `Program.cs` | Entry point, single-instance mutex, command-line dispatch, headless tray context, log, stable image copy into `%APPDATA%`. |
-| `MainForm.cs` | The user interface: drag and drop, clipboard paste, colour presets, palette, preview, apply, revert, autostart toggle, theme switch, unpin Edge. |
-| `ClipboardImage.cs` | Clipboard ingestion: copied image, copied file, copied folder, copied path, with retries while another application holds the clipboard. |
-| `OverlayEngine.cs` | Lifecycle of the overlay: watchdog, repaint timer, tray icon, host search, re-attach on Explorer restart, teardown. |
-| `OverlayWindow.cs` | The surface itself: window class, `WS_CHILD` attach, Z-order, `WM_PAINT` painting, *cover* scaling, clean shutdown repaint. |
-| `Native.cs` | P/Invoke surface: `EnumWindows`, `FindWindowEx`, `CreateWindowEx`, `SetWindowPos`, `RedrawWindow`, plus the `WorkerW` discovery logic and the DWM dark-mode attribute. |
-| `AutoStart.cs` | Autostart through `HKCU\...\CurrentVersion\Run`, with the `--apply` payload. |
-| `Reverter.cs` | Deterministic rollback: overlay, autostart, wallpaper override, taskbar size, saved image, theme. Also `ThemeUtil`. |
-| `TaskbarUtil.cs` | Taskbar button size: reads and writes `TaskbarSmallIcons` in `HKCU\...\Explorer\Advanced`, restores the original state, refuses to run on Windows 11. |
-| `ShellUtil.cs` | The Explorer restart, shared by the theme and the taskbar because the shell reads both settings only at startup. |
-| `BrowserUtil.cs` | Finds installed Chrome/Firefox/Edge via `App Paths` and registered `ProgId`s, reads the current default from `UserChoice`, and hands `http`, `https`, `.htm` and `.html` to the chosen browser. No direct `UserChoice` writes: Windows blocks them. |
-| `TaskbarPins.cs` | Pinning and unpinning taskbar items through the shell's `taskbarpin` / `taskbarunpin` verbs, falling back to deleting the shortcut in `Quick Launch\User Pinned\TaskBar`. |
-| `BrowserPickerForm.cs` | The picker dialog: which browser replaces Edge. Lists only browsers that are actually installed, plus the current default. |
+| `main.rs` | Entry point: GUI subsystem, DPI awareness, single-instance mutex, command-line dispatch. |
+| `program.rs` | Paths, logging, argument parsing, registry wrapper, window helpers. |
+| `app.rs` | Shared application state, message loop, window lifetime, tray-only mode. |
+| `ui/main_form.rs` | The user interface: drag and drop, clipboard paste, colour presets, palette, preview, apply, revert, autostart toggle, theme switch, unpin Edge. |
+| `ui/browser_picker.rs` | The picker dialog: which browser replaces Edge, with its own message loop. |
+| `ui/dialogs.rs` | Windows dialogs: file open, colour picker, message boxes. |
+| `ui/controls.rs` | The control model shared by both windows, including the cached *cover* preview. |
+| `ui/paint.rs` | GDI wrapper: brushes, fonts, text output, button and checkbox rendering, DPI scaling. |
+| `ui/tooltip.rs` | The hover tooltip window, shown after a delay and positioned in screen coordinates. |
+| `clipboard.rs` | Clipboard ingestion: copied image, copied file, copied folder, copied path, with retries while another application holds the clipboard. |
+| `engine.rs` | Lifecycle of the overlay: watchdog, repaint timer, tray icon and menu, re-attach on Explorer restart, teardown. |
+| `overlay.rs` | The surface itself: window class, `WS_CHILD` attach, Z-order, `WM_PAINT` painting, *cover* scaling, clean shutdown repaint. |
+| `native.rs` | Win32 wrappers: `EnumWindows`, `FindWindowEx`, `SetWindowPos`, `RedrawWindow`, plus the `WorkerW` discovery logic and the DWM dark-mode attribute. |
+| `theme.rs` | Windows theme read and write, and autostart through `HKCU\...\CurrentVersion\Run` with the `--apply` payload. |
+| `reverter.rs` | Deterministic rollback: overlay, autostart, wallpaper override, taskbar size, saved image, theme. |
+| `taskbar.rs` | Taskbar button size: reads and writes `TaskbarSmallIcons` in `HKCU\...\Explorer\Advanced`, restores the original state, refuses to run on Windows 11. |
+| `shell.rs` | The Explorer restart, shared by the theme and the taskbar because the shell reads both settings only at startup. |
+| `browser.rs` | Finds installed Chrome/Firefox/Edge via `App Paths` and registered `ProgId`s, reads the current default from `UserChoice`, and hands `http`, `https`, `.htm` and `.html` to the chosen browser. No direct `UserChoice` writes: Windows blocks them. |
+| `taskbar_pins.rs` | Pinning and unpinning taskbar items through the shell's `taskbarpin` / `taskbarunpin` verbs, falling back to deleting the shortcut in `Quick Launch\User Pinned\TaskBar`. |
+| `images.rs` | Decoding, *cover* scaling to BGRA, solid-colour generation, stable copies into `%APPDATA%`. |
 
 ## Safety and rollback
 
@@ -202,6 +214,6 @@ MIT.
 
 <div align="center">
 
-<p align="center"><sub>DesktopOverlay &nbsp;&middot;&nbsp; .NET 8 &nbsp;&middot;&nbsp; Windows 10 / 11 x64 &nbsp;&middot;&nbsp; MIT</sub></p>
+<p align="center"><sub>DesktopOverlay &nbsp;&middot;&nbsp; Rust &nbsp;&middot;&nbsp; Windows 10 / 11 x64 &nbsp;&middot;&nbsp; MIT</sub></p>
 
 </div>

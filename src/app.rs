@@ -1,19 +1,16 @@
-//! Склейка приложения: общее состояние, цикл сообщений и окна.
+﻿//! Склейка приложения: общее состояние, цикл сообщений и окна.
 
 use std::cell::RefCell;
 
 use image::DynamicImage;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, PostQuitMessage,
-    RegisterClassExW, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, MSG, SW_HIDE,
-    SW_SHOW, WM_QUIT, WNDCLASSEXW,
+    DestroyWindow, DispatchMessageW, GetMessageW, PostQuitMessage, ShowWindow, TranslateMessage, MSG,
+    SW_SHOW, WM_QUIT,
 };
-use windows::core::PCWSTR;
 
 use crate::engine::OverlayEngine;
-use crate::program::{self, utf16_with_nul};
+use crate::program::{self};
 use crate::reverter;
 use crate::ui::main_form;
 use crate::ui::{dialogs, paint};
@@ -36,42 +33,82 @@ thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
 }
 
+/// Готовность состояния и окно трея хранятся отдельно от `APP`: их читают
+/// обработчики окон, а `APP` в этот момент может быть уже занят — вызовы
+/// `RedrawWindow` и `CreateWindowExW` досылают сообщения синхронно.
+static APP_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static HIDDEN_HOST: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
+thread_local! {
+    /// Занят ли сейчас `APP`. `RedrawWindow` и перезапуск Проводника досылают
+    /// сообщения синхронно, поэтому таймер или значок трея могут прийти в тот
+    /// момент, когда состояние уже одолжили. Заходить второй раз нельзя:
+    /// повторный заём `RefCell` при `panic = "abort"` убивает процесс.
+    static APP_BUSY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Занято ли состояние прямо сейчас.
+pub fn is_busy() -> bool {
+    APP_BUSY.with(std::cell::Cell::get)
+}
+
 /// Есть ли состояние приложения.
-///
-/// Пока окно создаётся, `WM_NCCREATE` и другие сообщения приходят раньше,
-/// чем состояние появится: обращаться к нему в этот момент нельзя.
 pub fn is_ready() -> bool {
-    APP.with(|app| app.borrow().is_some())
+    APP_READY.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn set_ready(ready: bool) {
+    APP_READY.store(ready, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Запоминает скрытое окно трея, чтобы опознавать его без обращения к `APP`.
+pub fn set_hidden_host(hwnd: HWND) {
+    HIDDEN_HOST.store(hwnd.0 as isize, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Является ли окно скрытым хостом для режима «только трей».
+pub fn window_is_hidden_host(hwnd: HWND) -> bool {
+    if hwnd.0.is_null() {
+        return false;
+    }
+    HIDDEN_HOST.load(std::sync::atomic::Ordering::Relaxed) == hwnd.0 as isize
 }
 
 /// Выполняет действие над состоянием приложения.
 pub fn with_app<R>(action: impl FnOnce(&mut App) -> R) -> R {
-    APP.with(|app| {
+    assert!(!is_busy(), "состояние приложения уже одолжено");
+
+    APP_BUSY.with(|busy| busy.set(true));
+    let result = APP.with(|app| {
         let mut app = app.borrow_mut();
         let app = app.as_mut().expect("состояние приложения ещё не создано");
         action(app)
-    })
+    });
+    APP_BUSY.with(|busy| busy.set(false));
+    result
 }
 
-/// Действие над состоянием, если оно уже есть.
+/// Действие над состоянием, если оно уже есть и ещё не одолжено.
 pub fn try_with_app<R>(action: impl FnOnce(&mut App) -> R, fallback: R) -> R {
-    APP.with(|app| {
+    if is_busy() {
+        return fallback;
+    }
+
+    APP_BUSY.with(|busy| busy.set(true));
+    let result = APP.with(|app| {
         let mut app = app.borrow_mut();
         match app.as_mut() {
             Some(app) => action(app),
             None => fallback,
         }
-    })
-}
-
-/// Картинка для оверлея.
-pub fn overlay_image() -> Option<DynamicImage> {
-    with_app(|app| app.image.clone())
+    });
+    APP_BUSY.with(|busy| busy.set(false));
+    result
 }
 
 /// Показывает окно утилиты из трея.
 pub fn show_main_window() {
-    let Some(hwnd) = with_app(|app| app.main) else {
+    let Some(hwnd) = try_with_app(|app| app.main, None) else {
         return;
     };
 
@@ -94,6 +131,10 @@ pub fn exit_application() {
 
 /// Откат из трея: снимает всё и закрывает приложение.
 pub fn revert_from_tray() -> bool {
+    // Оверлей снимаем до отката: `revert_all` перезапускает Проводник, и он не
+    // должен успевать перерисовать нашу картинку поверх системных обоев.
+    with_app(|app| app.engine.remove());
+
     let report = reverter::revert_all(None, false);
     program::log(format!("откат из трея: {report}"));
 
@@ -107,7 +148,7 @@ pub fn revert_from_tray() -> bool {
 
 /// Статус в окне утилиты.
 pub fn set_status(message: &str) {
-    let hwnd = with_app(|app| app.main);
+    let hwnd = try_with_app(|app| app.main, None);
     if let Some(state) = hwnd.and_then(main_form::state) {
         state.set_status(message);
     }
@@ -123,11 +164,6 @@ pub fn window_long(hwnd: HWND) -> isize {
     }
 }
 
-/// Является ли окно скрытым хостом для режима «только трей».
-pub fn window_is_hidden_host(hwnd: HWND) -> bool {
-    try_with_app(|app| app.hidden_host == Some(hwnd), false)
-}
-
 /// Запускает приложение в нужном режиме и крутит цикл сообщений.
 pub fn run(command: program::Command) {
     match command {
@@ -135,7 +171,6 @@ pub fn run(command: program::Command) {
         program::Command::Revert { restore_light } => {
             let report = reverter::revert_all(None, restore_light);
             program::log(format!("откат из командной строки: {report}"));
-            return;
         }
 
         // Автозапуск: только оверлей и трей, окна утилиты нет.
@@ -172,15 +207,28 @@ fn start(
         hidden_host
     };
 
+    if let Some(hidden) = hidden_host {
+        if hidden.0.is_null() {
+            program::log("не удалось создать скрытое окно трея");
+            return;
+        }
+        set_hidden_host(hidden);
+    }
+
+    // `create` возвращает нулевой хендл, если окно не создалось: работать не с чем.
+    if main.is_some_and(|main| main.0.is_null()) {
+        program::log("не удалось создать окно утилиты");
+        return;
+    }
+
     let owner = match (main, hidden_host) {
-        (Some(main), _) => Some(main),
-        (_, Some(hidden)) => Some(hidden),
+        (Some(main), _) => main,
+        (_, Some(hidden)) => hidden,
         _ => {
             program::log("не удалось создать ни одного окна");
             return;
         }
     };
-    let owner = owner.expect("окно определено выше");
 
     APP.with(|slot| {
         *slot.borrow_mut() = Some(App {
@@ -192,9 +240,23 @@ fn start(
         });
     });
 
+    set_ready(true);
+
     // В режиме трея оверлей поднимаем сразу: окна утилиты нет.
     if hidden_host.is_some() {
-        with_app(|app| app.engine.apply(true));
+        // Картинку отдаём движку, и только после выхода из `with_app`
+        // забираем ошибку: внутри заём `RefCell` уже занят.
+        let error = with_app(|app| {
+            if let Some(image) = app.image.take() {
+                app.engine.set_image(image);
+            }
+            app.engine.apply(true);
+            app.engine.take_error()
+        });
+
+        if let Some(error) = error {
+            set_status(&error);
+        }
     }
 
     if visible {
@@ -203,10 +265,17 @@ fn start(
         }
     }
 
+    // Состояние появилось только сейчас — до этого окно создавалось вслепую.
+    main_form::run_pending_auto_apply();
+
     message_loop();
 
     // Оверлей снимаем явно: сначала показываем системные обои под окном.
     with_app(|app| app.engine.remove());
+
+    // Готовность снимаем до разрушения окон: их обработчики уже не должны
+    // лезть в состояние, которого больше нет.
+    set_ready(false);
     APP.with(|slot| {
         *slot.borrow_mut() = None;
     });
@@ -263,40 +332,3 @@ fn load_stable_copy(path: &std::path::Path) -> Option<DynamicImage> {
     }
 }
 
-/// Регистрирует класс окна по имени и оконной процедуре.
-pub fn register_class(name: &str, wnd_proc: WNDPROC) {
-    unsafe {
-        let class = utf16_with_nul(name);
-        let wc = WNDCLASSEXW {
-            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            style: CS_HREDRAW | CS_VREDRAW,
-            lpfnWndProc: Some(wnd_proc),
-            hInstance: GetModuleHandleW(None).unwrap_or_default().into(),
-            lpszClassName: PCWSTR(class.as_ptr()),
-            ..Default::default()
-        };
-
-        // Повторная регистрация возвращает 0 — это не ошибка.
-        RegisterClassExW(&wc);
-    }
-}
-
-/// Состояние окна утилиты, если окно открыто.
-pub fn main_state(hwnd: HWND) -> Option<&'static mut main_form::MainState> {
-    main_form::state(hwnd)
-}
-
-/// Тип оконной процедуры Win32.
-pub type WNDPROC = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
-
-/// Обработчик по умолчанию для сообщений, которые мы не перехватываем.
-pub fn default_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
-}
-
-/// Прячет окно, не закрывая его.
-pub fn hide_window(hwnd: HWND) {
-    unsafe {
-        let _ = ShowWindow(hwnd, SW_HIDE);
-    }
-}

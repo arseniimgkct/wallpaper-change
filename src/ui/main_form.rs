@@ -6,15 +6,16 @@
 use std::path::{Path, PathBuf};
 
 use image::DynamicImage;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, ReleaseCapture, SetCapture, VK_CONTROL};
 use windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, LoadCursorW, RegisterClassExW,
+    CreateWindowExW, DefWindowProcW, LoadCursorW, RegisterClassExW,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW,
     CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, IDC_WAIT, PostQuitMessage, SW_HIDE, SW_SHOW,
+    WM_NCCREATE,
     WM_CLOSE, WM_DESTROY, WM_DROPFILES,
     WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY,
     WM_PAINT, WM_TIMER, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CAPTION, WS_CLIPCHILDREN,
@@ -34,12 +35,14 @@ use crate::shell;
 use crate::taskbar;
 use crate::taskbar_pins::{self, TaskbarResult};
 use crate::theme;
-use crate::ui::controls::{Action, Control, ControlState, LabelColor};
+use crate::ui::controls::{self, Action, Control, ControlState, LabelColor};
 use crate::ui::paint::{self, Painter};
-use crate::ui::{browser_picker, dialogs};
+use crate::ui::{browser_picker, dialogs, tooltip};
 
 const CLASS_NAME: &str = "DesktopOverlayMainForm";
 const HIDDEN_CLASS: &str = "DesktopOverlayHiddenHost";
+
+const TIMER_TOOLTIP: usize = 3;
 
 /// Логический размер окна: как в оригинале, 500 x 512.
 const WINDOW_WIDTH: i32 = 500;
@@ -64,7 +67,12 @@ pub struct MainState {
     controls: Vec<Control>,
     /// Выбранный файл или сгенерированная картинка цвета.
     chosen: Option<PathBuf>,
-    preview: Option<DynamicImage>,
+    /// Превью в BGRA, пересчитанное один раз на текущий размер окна.
+    preview: Option<controls::Preview>,
+    /// Исходная картинка: из неё превью строится заново при смене размера окна.
+    source: Option<DynamicImage>,
+    /// Кегль, по которому построены шрифты и превью окна.
+    dpi: i32,
     hint_visible: bool,
     status: String,
     autostart_checked: bool,
@@ -74,6 +82,10 @@ pub struct MainState {
     pressed: Option<usize>,
     /// Идёт долгая операция: повторные нажатия игнорируем.
     busy: bool,
+    /// Окно подсказки.
+    tooltip: tooltip::Tooltip,
+    /// Элемент, под которым сейчас показывается или будет показана подсказка.
+    tooltip_target: Option<usize>,
 }
 
 impl MainState {
@@ -85,6 +97,8 @@ impl MainState {
             controls: Vec::new(),
             chosen: None,
             preview: None,
+            source: None,
+            dpi: window_dpi(),
             hint_visible: true,
             status: if autostart_checked {
                 "Автозапуск активен. Оверлей прикреплен к рабочему столу.".to_string()
@@ -95,6 +109,8 @@ impl MainState {
             hover: None,
             pressed: None,
             busy: false,
+            tooltip: tooltip::Tooltip::create(hwnd),
+            tooltip_target: None,
         });
 
         state.rebuild_controls();
@@ -249,6 +265,45 @@ impl MainState {
         }
     }
 
+    /// Прямоугольник зоны перетаскивания в логических координатах окна.
+    fn drop_zone_rect(&self) -> RECT {
+        self.controls
+            .iter()
+            .find(|control| matches!(control, Control::DropZone { .. }))
+            .map(Control::rect)
+            .unwrap_or_default()
+    }
+
+    /// Пересчитывает превью под текущий размер окна.
+    ///
+    /// Вызывается из отрисовки: пересчёт дорогой, поэтому он выполняется
+    /// только когда сменилась картинка или размер окна. Иначе каждое
+    /// движение мыши пересобирало бы картинку заново.
+    fn refresh_preview(&mut self, dpi: i32) {
+        let rect = paint::scale_rect(self.drop_zone_rect(), dpi);
+
+        let up_to_date = match &self.preview {
+            Some(preview) => preview.width == rect.right - rect.left,
+            None => false,
+        };
+
+        if up_to_date {
+            return;
+        }
+
+        self.preview = self
+            .source
+            .as_ref()
+            .and_then(|source| controls::Preview::build(source, rect));
+    }
+
+    /// Запоминает картинку и сразу строит по ней превью.
+    fn set_preview(&mut self, image: DynamicImage) {
+        let rect = paint::scale_rect(self.drop_zone_rect(), self.dpi);
+        self.preview = controls::Preview::build(&image, rect);
+        self.source = Some(image);
+    }
+
     /// Показывает окно.
     pub fn show(&self) {
         unsafe {
@@ -257,23 +312,81 @@ impl MainState {
     }
 
     /// Кнопка под координатами.
+    ///
+    /// Координаты мыши приходят в пикселях окна, а раскладка задана в
+    /// логических координатах, поэтому прямоугольники масштабируются здесь же.
     fn hit(&self, x: i32, y: i32) -> Option<usize> {
-        self.controls
-            .iter()
-            .position(|control| control.is_enabled() && control.contains(x, y))
+        self.controls.iter().position(|control| {
+            control.is_enabled() && paint::contains(control.scaled_rect(self.dpi), x, y)
+        })
     }
 
     fn set_hover(&mut self, index: Option<usize>) {
-        if self.hover != index {
-            self.hover = index;
-            self.invalidate();
+        if self.hover == index {
+            return;
         }
+
+        self.hover = index;
+
+        // Подсказка показывается для того элемента, на котором мышь остановилась.
+        let target = index.filter(|i| {
+            self.controls[*i].tooltip().is_some() && self.controls[*i].is_enabled()
+        });
+
+        self.schedule_tooltip(target);
+        self.invalidate();
+    }
+
+    fn schedule_tooltip(&mut self, target: Option<usize>) {
+        if self.tooltip_target != target {
+            self.tooltip.hide();
+        }
+
+        self.tooltip_target = target;
+
+        unsafe {
+            let _ = windows::Win32::UI::WindowsAndMessaging::KillTimer(
+                Some(self.hwnd),
+                TIMER_TOOLTIP,
+            );
+        }
+
+        if target.is_some() {
+            unsafe {
+                windows::Win32::UI::WindowsAndMessaging::SetTimer(
+                    Some(self.hwnd),
+                    TIMER_TOOLTIP,
+                    tooltip::SHOW_DELAY_MS,
+                    None,
+                );
+            }
+        }
+    }
+
+    fn on_tooltip_timer(&mut self) {
+        let Some(index) = self.tooltip_target else {
+            return;
+        };
+
+        // Элемент мог исчезнуть при перестроении раскладки.
+        let Some(control) = self.controls.get(index) else {
+            self.schedule_tooltip(None);
+            return;
+        };
+
+        let Some(text) = control.tooltip().map(str::to_string) else {
+            self.schedule_tooltip(None);
+            return;
+        };
+
+        self.tooltip.show_below(&text, control.rect());
+        self.tooltip_target = None;
     }
 
     /// Выбирает файл и обновляет превью.
     pub fn select_file(&mut self, path: &Path, is_solid_color: bool, color_hex: Option<&str>) {
         match images::probe(path) {
-            Some(image) => self.preview = Some(image),
+            Some(image) => self.set_preview(image),
             None => {
                 self.preview = None;
                 self.hint_visible = true;
@@ -303,71 +416,96 @@ impl MainState {
     }
 
     /// Ставит выбранную картинку на рабочий стол.
-    pub fn apply_wallpaper(&mut self, success: Option<&str>) {
-        let Some(chosen) = self.chosen.clone() else {
+    ///
+    /// Заём `MainState` берётся порциями: внутри этой операции крутятся
+    /// собственные циклы сообщений диалогов, и держать `&mut` на всё время
+    /// означало бы второй заём того же состояния из `WM_PAINT`.
+    pub fn apply_wallpaper(hwnd: HWND, success: Option<&str>) {
+        let Some(chosen) = with_state(hwnd, |state| state.chosen.clone()) else {
             return;
+        };
+        let chosen = match chosen {
+            Some(chosen) => chosen,
+            None => return,
         };
 
         let image = match images::stable_copy(&chosen) {
             Ok(image) => image,
             Err(error) => {
-                self.set_status(&format!("Не удалось загрузить изображение: {error}"));
+                with_state(hwnd, |state| {
+                    state.set_status(&format!("Не удалось загрузить изображение: {error}"));
+                });
                 dialogs::show_error(
-                    self.hwnd,
+                    hwnd,
                     &format!("Не удалось загрузить изображение:\n{error}"),
                 );
                 return;
             }
         };
 
-        // Картинку кладём в состояние приложения: оттуда её берёт и движок,
-        // которому нужно пересоздавать оверлей после перезапуска Проводника.
-        let applied = app::with_app(|app| {
+        // Картинку отдаём движку: он пересоздаёт оверлей сам, когда Проводник
+        // перезапустит свои окна. Ошибку забираем после выхода из `with_app`,
+        // иначе движок полез бы в занятый `RefCell`.
+        let (applied, error) = app::with_app(|app| {
             app.image = Some(image);
-            app.engine.apply(true)
+            let applied = app.engine.apply(true);
+            (applied, app.engine.take_error())
         });
 
-        if !applied {
-            self.set_status("Не удалось встроиться в рабочий стол. Подробности в overlay.log.");
-            return;
-        }
+        with_state(hwnd, |state| {
+            if !applied {
+                state.set_status(error.as_deref().unwrap_or(
+                    "Не удалось встроиться в рабочий стол. Подробности в overlay.log.",
+                ));
+                return;
+            }
 
-        self.autostart_checked = theme::autostart_is_enabled();
-        self.rebuild_controls();
-        self.set_status(success.unwrap_or("Обои успешно установлены поверх системных."));
+            state.autostart_checked = theme::autostart_is_enabled();
+            state.rebuild_controls();
+            state
+                .set_status(success.unwrap_or("Обои успешно установлены поверх системных."));
+        });
     }
 
     /// Вставляет картинку из буфера обмена и сразу ставит её.
-    pub fn paste_from_clipboard(&mut self) {
+    pub fn paste_from_clipboard(hwnd: HWND) {
         let path = match clipboard::try_take() {
             Ok(path) => path,
             Err(error) => {
-                self.set_status(&error);
+                with_state(hwnd, |state| state.set_status(&error));
                 return;
             }
         };
 
-        self.select_file(&path, false, None);
-        if self.chosen.is_none() {
+        let chosen = with_state(hwnd, |state| {
+            state.select_file(&path, false, None);
+            state.chosen.is_some()
+        });
+        if chosen != Some(true) {
             return;
         }
 
-        self.set_status("Картинка из буфера обмена выбрана, устанавливаю...");
-        self.apply_wallpaper(Some("Картинка из буфера обмена установлена на рабочий стол."));
+        with_state(hwnd, |state| {
+            state.set_status("Картинка из буфера обмена выбрана, устанавливаю...")
+        });
+        MainState::apply_wallpaper(
+            hwnd,
+            Some("Картинка из буфера обмена установлена на рабочий стол."),
+        );
     }
 
     /// Генерирует картинку сплошного цвета и выбирает её.
-    pub fn set_solid_color(&mut self, color: [u8; 3]) {
-        match images::solid_color(color) {
-            Ok(path) => self.select_file(&path, true, Some(&images::hex(color))),
-            Err(error) => self.set_status(&format!("Ошибка генерации цвета: {error}")),
-        }
+    pub fn set_solid_color(hwnd: HWND, color: [u8; 3]) {
+        with_state(hwnd, |state| match images::solid_color(color) {
+            Ok(path) => state.select_file(&path, true, Some(&images::hex(color))),
+            Err(error) => state.set_status(&format!("Ошибка генерации цвета: {error}")),
+        });
     }
 
     /// Полный откат с подтверждениями.
-    pub fn revert(&mut self) {
+    pub fn revert(hwnd: HWND) {
         if !dialogs::confirm(
-            self.hwnd,
+            hwnd,
             "Убрать оверлей с рабочего стола и вернуть системные обои?",
             "Откатить обои",
         ) {
@@ -375,73 +513,84 @@ impl MainState {
         }
 
         let also_light = dialogs::confirm(
-            self.hwnd,
+            hwnd,
             "Также вернуть светлую тему Windows?",
             "Тема оформления",
         );
 
-        self.perform_revert(also_light);
-    }
+        // Оверлей снимаем коротким заёмом, а сам откат — уже без него: внутри
+        // перезапускается Проводник и крутятся сообщения.
+        app::with_app(|app| app.engine.remove());
+        let report = reverter::revert_all(None, also_light);
 
-    fn perform_revert(&mut self, restore_light: bool) {
-        let report = app::with_app(|app| reverter::revert_all(Some(&mut app.engine), restore_light));
+        with_state(hwnd, |state| {
+            state.preview = None;
+            state.hint_visible = true;
+            state.chosen = None;
+            state.autostart_checked = theme::autostart_is_enabled();
 
-        self.preview = None;
-        self.hint_visible = true;
-        self.chosen = None;
-        self.autostart_checked = theme::autostart_is_enabled();
-
-        self.rebuild_controls();
-        self.set_status(&format!("Откат выполнен: {report}."));
+            state.rebuild_controls();
+            state.set_status(&format!("Откат выполнен: {report}."));
+        });
     }
 
     /// Переключение темы Windows.
-    fn toggle_windows_theme(&mut self) {
+    pub fn toggle_windows_theme(hwnd: HWND) {
         let dark = !theme::is_dark_theme();
-        self.set_status("Переключение темы Windows и перезапуск проводника...");
-        self.begin_busy();
+        with_state(hwnd, |state| {
+            state.set_status("Переключение темы Windows и перезапуск проводника...")
+        });
+        begin_busy(hwnd);
         engine::pump_messages();
 
         let applied = theme::apply_and_restart_explorer(dark);
 
-        self.busy = false;
-        self.set_default_cursor();
-        self.rebuild_controls();
+        end_busy(hwnd);
 
-        let message = if applied {
-            format!(
-                "Тема переключена: {}. Проводник перезапущен.",
-                if dark { "Тёмная" } else { "Светлая" }
-            )
-        } else {
-            "Не удалось переключить тему Windows — проверьте права записи в реестр.".to_string()
-        };
-        self.set_status(&message);
+        with_state(hwnd, |state| {
+            state.rebuild_controls();
+            state.set_status(&if applied {
+                format!(
+                    "Тема переключена: {}. Проводник перезапущен.",
+                    if dark { "Тёмная" } else { "Светлая" }
+                )
+            } else {
+                "Не удалось переключить тему Windows — проверьте права записи в реестр."
+                    .to_string()
+            });
+        });
     }
 
     /// Уменьшение и восстановление панели задач.
-    fn toggle_taskbar(&mut self) {
+    pub fn toggle_taskbar(hwnd: HWND) {
         if !taskbar::is_supported() {
-            self.set_status(taskbar::is_supported_message());
+            with_state(hwnd, |state| state.set_status(taskbar::is_supported_message()));
             return;
         }
 
         let target = taskbar::is_small() != Some(true);
 
-        self.set_status("Меняю размер панели задач и перезапускаю Проводник...");
-        self.begin_busy();
+        with_state(hwnd, |state| {
+            state.set_status("Меняю размер панели задач и перезапускаю Проводник...")
+        });
+        begin_busy(hwnd);
 
         if !taskbar::set_small(target) {
-            self.busy = false;
-            self.set_default_cursor();
-            self.set_status("Не удалось изменить панель задач — проверьте права записи в реестр.");
+            end_busy(hwnd);
+            with_state(hwnd, |state| {
+                state.set_status(
+                    "Не удалось изменить панель задач — проверьте права записи в реестр.",
+                )
+            });
             return;
         }
 
-        self.set_status(if target {
-            "Панель задач уменьшена. Проводник перезапущен."
-        } else {
-            "Панель задач возвращена к обычному размеру. Проводник перезапущен."
+        with_state(hwnd, |state| {
+            state.set_status(if target {
+                "Панель задач уменьшена. Проводник перезапущен."
+            } else {
+                "Панель задач возвращена к обычному размеру. Проводник перезапущен."
+            })
         });
 
         shell::restart_explorer();
@@ -449,31 +598,36 @@ impl MainState {
         engine::pump_messages();
         native::redraw_desktop();
 
-        self.busy = false;
-        self.set_default_cursor();
-        self.rebuild_controls();
+        end_busy(hwnd);
+        with_state(hwnd, |state| state.rebuild_controls());
     }
 
     /// Открепляет Edge и передаёт браузер по умолчанию выбранному.
-    fn detach_edge_and_pick_browser(&mut self) {
+    pub fn detach_edge_and_pick_browser(hwnd: HWND) {
         let browsers = browser::detect_alternatives();
         if browsers.is_empty() {
-            self.set_status(
-                "Chrome и Firefox не найдены. Установите один из них, чтобы сменить \
-                 браузер по умолчанию.",
-            );
+            with_state(hwnd, |state| {
+                state.set_status(
+                    "Chrome и Firefox не найдены. Установите один из них, чтобы сменить \
+                     браузер по умолчанию.",
+                )
+            });
             return;
         }
 
-        let Some(chosen) = browser_picker::show(self.hwnd, &browsers) else {
+        // Окно выбора крутит собственный цикл сообщений: заём состояния на
+        // это время брать нельзя.
+        let Some(chosen) = browser_picker::show(hwnd, &browsers) else {
             return;
         };
 
-        self.set_status(&format!(
-            "Открепляю Microsoft Edge и передаю браузер {}...",
-            chosen.title
-        ));
-        self.begin_busy();
+        with_state(hwnd, |state| {
+            state.set_status(&format!(
+                "Открепляю Microsoft Edge и передаю браузер {}...",
+                chosen.title
+            ))
+        });
+        begin_busy(hwnd);
 
         let mut taskbar_report = "Microsoft Edge и так не был закреплён на панели задач.".to_string();
         if taskbar_pins::is_pinned(taskbar_pins::EDGE_NAME) {
@@ -494,66 +648,81 @@ impl MainState {
             }
         }
 
-        self.rebuild_controls();
+        with_state(hwnd, |state| state.rebuild_controls());
 
         let (_, browser_report) = browser::make_default(&chosen);
-        self.busy = false;
-        self.set_default_cursor();
-        self.set_status(&format!("{browser_report} {taskbar_report}"));
+        end_busy(hwnd);
+        with_state(hwnd, |state| {
+            state.set_status(&format!("{browser_report} {taskbar_report}"))
+        });
     }
 
     /// Включение и выключение автозапуска.
-    fn toggle_autostart(&mut self) {
-        match theme::set_autostart(!self.autostart_checked) {
+    pub fn toggle_autostart(hwnd: HWND) {
+        let Some(current) = with_state(hwnd, |state| state.autostart_checked) else {
+            return;
+        };
+
+        match theme::set_autostart(!current) {
             Ok(()) => {
-                self.autostart_checked = theme::autostart_is_enabled();
-                self.rebuild_controls();
-                self.set_status(if self.autostart_checked {
-                    "Автозапуск включён."
-                } else {
-                    "Автозапуск выключен."
+                with_state(hwnd, |state| {
+                    state.autostart_checked = theme::autostart_is_enabled();
+                    state.rebuild_controls();
+                    state.set_status(if state.autostart_checked {
+                        "Автозапуск включён."
+                    } else {
+                        "Автозапуск выключен."
+                    });
                 });
             }
             Err(error) => {
                 // Флажок возвращается в прежнее состояние: включить не вышло.
-                self.rebuild_controls();
-                self.set_status(&error);
-                dialogs::show_warning(self.hwnd, &error);
+                with_state(hwnd, |state| state.rebuild_controls());
+                with_state(hwnd, |state| state.set_status(&error));
+                dialogs::show_warning(hwnd, &error);
             }
         }
     }
+}
 
-    /// Вход в долгую операцию: курсор «часы», окно не перерисовывается заново.
-    fn begin_busy(&mut self) {
-        self.busy = true;
-        self.set_wait_cursor();
-    }
+/// Короткий заём состояния окна.
+///
+/// Всё, что внутри этого заёма, обязано быть синхронным: любой вызов,
+/// крутящий сообщения (`MessageBox`, `pump_messages`, модальный выбор),
+/// приводит к повторному входу в `WM_PAINT` и ко второму `&mut` на то же
+/// состояние.
+fn with_state<R>(hwnd: HWND, action: impl FnOnce(&mut MainState) -> R) -> Option<R> {
+    state(hwnd).map(action)
+}
 
-    fn set_wait_cursor(&self) {
-        unsafe {
-            if let Ok(cursor) = LoadCursorW(None, IDC_WAIT) {
-                let _ = windows::Win32::UI::WindowsAndMessaging::SetCursor(Some(cursor));
-            }
+/// Вход в долгую операцию: курсор «часы», повторные нажатия игнорируем.
+fn begin_busy(hwnd: HWND) {
+    with_state(hwnd, |state| {
+        state.busy = true;
+        set_wait_cursor();
+    });
+}
+
+/// Выход из долгой операции: обычный курсор и перерисовка кнопок.
+fn end_busy(hwnd: HWND) {
+    with_state(hwnd, |state| {
+        state.busy = false;
+        set_default_cursor();
+    });
+}
+
+fn set_wait_cursor() {
+    unsafe {
+        if let Ok(cursor) = LoadCursorW(None, IDC_WAIT) {
+            let _ = windows::Win32::UI::WindowsAndMessaging::SetCursor(Some(cursor));
         }
     }
+}
 
-    fn set_default_cursor(&self) {
-        unsafe {
-            if let Ok(cursor) = LoadCursorW(None, IDC_ARROW) {
-                let _ = windows::Win32::UI::WindowsAndMessaging::SetCursor(Some(cursor));
-            }
-        }
-    }
-
-    /// Видно ли окно.
-    pub fn is_visible(&self) -> bool {
-        unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(self.hwnd).as_bool() }
-    }
-
-    /// Скрыть окно в трей.
-    pub fn hide(&self) {
-        unsafe {
-            let _ = ShowWindow(self.hwnd, SW_HIDE);
+fn set_default_cursor() {
+    unsafe {
+        if let Ok(cursor) = LoadCursorW(None, IDC_ARROW) {
+            let _ = windows::Win32::UI::WindowsAndMessaging::SetCursor(Some(cursor));
         }
     }
 }
@@ -611,22 +780,28 @@ pub fn create(preselect: Option<PathBuf>, auto_apply: bool) -> HWND {
     let class = utf16_with_nul(CLASS_NAME);
     let dpi = window_dpi();
 
+    let style = WINDOW_STYLE(
+        WS_OVERLAPPED.0
+            | WS_CAPTION.0
+            | WS_SYSMENU.0
+            | WS_MINIMIZEBOX.0
+            | WS_CLIPCHILDREN.0,
+    );
+
+    // Раскладка задана в логических координатах и рассчитана на клиентскую
+    // область, поэтому размер окна нужно увеличить на рамку и заголовок.
+    let (window_width, window_height) = window_size_for_client(WINDOW_WIDTH, WINDOW_HEIGHT, style, dpi);
+
     let hwnd = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE(0),
             PCWSTR(class.as_ptr()),
             PCWSTR(title.as_ptr()),
-            WINDOW_STYLE(
-                WS_OVERLAPPED.0
-                    | WS_CAPTION.0
-                    | WS_SYSMENU.0
-                    | WS_MINIMIZEBOX.0
-                    | WS_CLIPCHILDREN.0,
-            ),
+            style,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            scaled(WINDOW_WIDTH, dpi as i32),
-            scaled(WINDOW_HEIGHT, dpi),
+            window_width,
+            window_height,
             None,
             None,
             GetModuleHandleW(None).ok().map(Into::into),
@@ -659,13 +834,29 @@ pub fn create(preselect: Option<PathBuf>, auto_apply: bool) -> HWND {
     if let Some(path) = preselect {
         if let Some(window_state) = state(hwnd) {
             window_state.select_file(&path, false, None);
-            if auto_apply {
-                window_state.apply_wallpaper(None);
-            }
         }
     }
 
+    // Применение откладываем: на этом этапе состояние приложения ещё не
+    // создано, а `apply_wallpaper` к нему обращается.
+    PENDING_AUTO_APPLY.store(auto_apply, std::sync::atomic::Ordering::Relaxed);
+
     hwnd
+}
+
+static PENDING_AUTO_APPLY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Применяет картинку, если её запустили с `--set`.
+pub fn run_pending_auto_apply() {
+    if !PENDING_AUTO_APPLY.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+
+    let Some(hwnd) = app::with_app(|app| app.main) else {
+        return;
+    };
+    MainState::apply_wallpaper(hwnd, None);
 }
 
 /// Скрытое окно для режима «только трей»: принимает таймеры и значок.
@@ -732,6 +923,34 @@ fn scaled(value: i32, dpi: i32) -> i32 {
     (value as f64 * dpi as f64 / 96.0).round() as i32
 }
 
+/// Размер окна, при котором клиентская область равна запрошенной.
+///
+/// Раскладка нарисована в логических координатах от левого верхнего угла
+/// клиентской области, поэтому задавать размер окна напрямую нельзя: рамка
+/// и заголовок съедали бы часть элементов, и нижняя строка статуса
+/// обрезалась бы.
+fn window_size_for_client(
+    client_width: i32,
+    client_height: i32,
+    style: WINDOW_STYLE,
+    dpi: i32,
+) -> (i32, i32) {
+    use windows::Win32::UI::WindowsAndMessaging::AdjustWindowRectEx;
+
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: scaled(client_width, dpi),
+        bottom: scaled(client_height, dpi),
+    };
+
+    unsafe {
+        let _ = AdjustWindowRectEx(&mut rect, style, false, WINDOW_EX_STYLE(0));
+    }
+
+    (rect.right - rect.left, rect.bottom - rect.top)
+}
+
 fn center_window(hwnd: HWND) {
     use windows::Win32::UI::WindowsAndMessaging::{SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER};
 
@@ -765,6 +984,12 @@ pub unsafe extern "system" fn wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // Тёмный заголовок окна. Заглавная буква DWM работает и до создания
+    // состояния, поэтому обрабатываем здесь, до проверки готовности.
+    if message == WM_NCCREATE {
+        native::enable_dark_mode_for_window(hwnd);
+    }
+
     // Пока создаётся окно, состояния приложения ещё нет: сообщения
     // `WM_NCCREATE` и `WM_CREATE` приходят раньше, чем его удалось создать.
     // На них нужно ответить, не заглядывая в состояние.
@@ -779,10 +1004,22 @@ pub unsafe extern "system" fn wnd_proc(
 
     // Значок в трее есть и у окна утилиты.
     if message == engine::TRAY_MESSAGE {
-        let exit = app::with_app(|app| app.engine.on_tray_message(lparam));
-        if exit {
-            return DefWindowProcW(hwnd, message, wparam, lparam);
+        // Команду выполняем уже после выхода из `with_app`: внутри него
+        // `RefCell` уже занят, повторный заём паниковал бы. `try_with_app`
+        // дополнительно защищает от прихода сообщения в момент, когда
+        // состояние одолжил кто-то ещё: `panic = "abort"` не оставляет
+        // шанса почистить оверлей, и картинка осталась бы в обоях навсегда.
+        let command = app::try_with_app(|app| app.engine.on_tray_message(lparam), engine::TrayCommand::None);
+
+        match command {
+            engine::TrayCommand::ShowWindow => app::show_main_window(),
+            engine::TrayCommand::Revert => {
+                app::revert_from_tray();
+            }
+            engine::TrayCommand::Exit => app::exit_application(),
+            engine::TrayCommand::None => {}
         }
+
         return LRESULT(0);
     }
 
@@ -812,6 +1049,8 @@ pub unsafe extern "system" fn wnd_proc(
 
         WM_LBUTTONDOWN => {
             if let Some(state) = state(hwnd) {
+                state.schedule_tooltip(None);
+
                 if state.busy {
                     return LRESULT(0);
                 }
@@ -840,7 +1079,7 @@ pub unsafe extern "system" fn wnd_proc(
 
                 // Срабатывает только если отпустили над той же кнопкой.
                 if hit.is_some() && hit == pressed {
-                    action = state.controls[hit.unwrap()].action();
+                    action = hit.and_then(|index| state.controls[index].action());
                 }
                 state.invalidate();
             }
@@ -856,9 +1095,7 @@ pub unsafe extern "system" fn wnd_proc(
             if wparam.0 as u32 == b'V' as u32 {
                 let control = GetKeyState(VK_CONTROL.0 as i32);
                 if control < 0 {
-                    if let Some(state) = state(hwnd) {
-                        state.paste_from_clipboard();
-                    }
+                    MainState::paste_from_clipboard(hwnd);
                     return LRESULT(0);
                 }
             }
@@ -879,13 +1116,20 @@ pub unsafe extern "system" fn wnd_proc(
         }
 
         WM_TIMER => {
-            app::with_app(|app| app.engine.on_timer(wparam.0));
+            if wparam.0 == TIMER_TOOLTIP {
+                if let Some(state) = state(hwnd) {
+                    state.on_tooltip_timer();
+                }
+                return LRESULT(0);
+            }
+
+            app::try_with_app(|app| app.engine.on_timer(wparam.0), ());
             return LRESULT(0);
         }
 
         // Закрытие окна прячет его в трей, а не завершает программу.
         WM_CLOSE => {
-            if !app::with_app(|app| app.really_exit) {
+            if !app::try_with_app(|app| app.really_exit, true) {
                 let _ = ShowWindow(hwnd, SW_HIDE);
                 return LRESULT(0);
             }
@@ -893,11 +1137,11 @@ pub unsafe extern "system" fn wnd_proc(
         }
 
         WM_DESTROY => {
-            if !app::with_app(|app| app.really_exit) {
+            if !app::try_with_app(|app| app.really_exit, true) {
                 let _ = ShowWindow(hwnd, SW_HIDE);
                 return LRESULT(0);
             }
-            app::with_app(|app| app.engine.remove());
+            app::try_with_app(|app| app.engine.remove(), ());
             PostQuitMessage(0);
             return LRESULT(0);
         }
@@ -926,16 +1170,23 @@ unsafe fn hidden_host_proc(
 ) -> LRESULT {
     match message {
         WM_TIMER => {
-            app::with_app(|app| app.engine.on_timer(wparam.0));
+            app::try_with_app(|app| app.engine.on_timer(wparam.0), ());
             LRESULT(0)
         }
 
         engine::TRAY_MESSAGE => {
-            let exit = app::with_app(|app| app.engine.on_tray_message(lparam));
-            if exit {
-                let _ = DestroyWindow(hwnd);
-                PostQuitMessage(0);
+            let command =
+                app::try_with_app(|app| app.engine.on_tray_message(lparam), engine::TrayCommand::None);
+
+            match command {
+                engine::TrayCommand::ShowWindow => app::show_main_window(),
+                engine::TrayCommand::Revert => {
+                    app::revert_from_tray();
+                }
+                engine::TrayCommand::Exit => app::exit_application(),
+                engine::TrayCommand::None => {}
             }
+
             LRESULT(0)
         }
 
@@ -949,75 +1200,42 @@ fn point_of(lparam: LPARAM) -> (i32, i32) {
 }
 
 /// Выполняет действие кнопки.
+///
+/// Все действия принимают `hwnd`, а не `&mut MainState`: почти каждое
+/// открывает диалог или перезапускает Проводник, а это крутит сообщения.
 fn run_action(hwnd: HWND, action: Action) {
     match action {
         Action::PickFile => {
             if let Some(path) = dialogs::open_image_file(hwnd) {
-                if let Some(state) = state(hwnd) {
-                    state.select_file(&path, false, None);
-                }
+                with_state(hwnd, |state| state.select_file(&path, false, None));
             }
         }
 
-        Action::Paste => {
-            if let Some(state) = state(hwnd) {
-                state.paste_from_clipboard();
-            }
-        }
+        Action::Paste => MainState::paste_from_clipboard(hwnd),
 
         Action::PickColor => {
             if let Some(color) = dialogs::choose_color(hwnd, [18, 18, 18]) {
-                if let Some(state) = state(hwnd) {
-                    state.set_solid_color(color);
-                }
+                MainState::set_solid_color(hwnd, color);
             }
         }
 
         Action::PresetColor(index) => {
             if let Some((color, _)) = PRESETS.get(index).copied() {
-                if let Some(state) = state(hwnd) {
-                    state.set_solid_color(color);
-                }
+                MainState::set_solid_color(hwnd, color);
             }
         }
 
-        Action::Apply => {
-            if let Some(state) = state(hwnd) {
-                state.apply_wallpaper(None);
-            }
-        }
+        Action::Apply => MainState::apply_wallpaper(hwnd, None),
 
-        Action::Revert => {
-            if let Some(state) = state(hwnd) {
-                state.revert();
-            }
-        }
+        Action::Revert => MainState::revert(hwnd),
 
-        Action::ToggleTheme => {
-            if let Some(state) = state(hwnd) {
-                state.toggle_windows_theme();
-            }
-        }
+        Action::ToggleTheme => MainState::toggle_windows_theme(hwnd),
 
-        Action::ToggleTaskbar => {
-            if let Some(state) = state(hwnd) {
-                state.toggle_taskbar();
-            }
-        }
+        Action::ToggleTaskbar => MainState::toggle_taskbar(hwnd),
 
-        Action::DetachEdge => {
-            if let Some(state) = state(hwnd) {
-                state.detach_edge_and_pick_browser();
-            }
-        }
+        Action::DetachEdge => MainState::detach_edge_and_pick_browser(hwnd),
 
-        Action::ToggleAutoStart => {
-            if let Some(state) = state(hwnd) {
-                state.toggle_autostart();
-            }
-        }
-
-        Action::ClosePicker => {}
+        Action::ToggleAutoStart => MainState::toggle_autostart(hwnd),
     }
 }
 
@@ -1033,18 +1251,18 @@ unsafe fn paint(hwnd: HWND) {
         return;
     }
 
-    let painter = Painter::new(hdc, window_dpi());
+    let dpi = state.dpi;
+    let painter = Painter::new(hdc, dpi);
     painter.fill(
-        paint::rect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT),
+        paint::scale_rect(paint::rect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT), dpi),
         paint::BACKGROUND,
     );
 
-    // Превью копируем, чтобы не держать два заимствования состояния.
-    let preview = state.preview.clone();
+    state.refresh_preview(dpi);
+
     let control_state = ControlState {
-        preview: preview.as_ref(),
+        preview: state.preview.as_ref(),
         hint_visible: state.hint_visible,
-        background: paint::BACKGROUND,
         drop_border: paint::rgb(42, 42, 42),
     };
 

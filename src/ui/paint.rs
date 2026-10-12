@@ -1,7 +1,7 @@
 //! Тонкий слой над GDI: кисти, шрифты и вывод текста.
 //!
-//! Окна рисуются сами (owner draw), поэтому здесь собрано всё, что нужно для
-//! отрисовки кнопок, подписей и подсказок в стиле исходного окна WinForms.
+//! Окна рисуются сами, поэтому здесь собрано всё, что нужно для
+//! отрисовки кнопок, подписей и подсказок в тёмной теме.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -61,7 +61,7 @@ pub fn release_fonts() {
     });
 }
 
-/// Шрифт Segoe UI нужного кегля. Кегль задаётся в логических точках, как в WinForms.
+/// Шрифт Segoe UI нужного кегля. Кегль задаётся в логических точках.
 pub fn font(points: f32, bold: bool, dpi: i32) -> HFONT {
     let pixel_height = ((points as f64 * dpi as f64 / 72.0).round() as i32).max(8);
     let weight = if bold { 700 } else { FW_NORMAL.0 as i32 };
@@ -113,30 +113,17 @@ impl Painter {
         Painter { hdc, dpi }
     }
 
-    pub fn dpi(&self) -> i32 {
-        self.dpi
-    }
-
     pub fn hdc(&self) -> windows::Win32::Graphics::Gdi::HDC {
         self.hdc
     }
 
-    /// Масштаб логических пикселей WinForms под текущий экран.
-    pub fn scale(&self) -> i32 {
-        (self.dpi / 96).max(1)
+    /// Кегль, по которому холст переводит логические координаты в пиксели.
+    pub fn dpi(&self) -> i32 {
+        self.dpi
     }
 
     pub fn scale_len(&self, logical: i32) -> i32 {
         (logical as f64 * self.dpi as f64 / 96.0).round() as i32
-    }
-
-    pub fn scale_rect(&self, rect: RECT) -> RECT {
-        RECT {
-            left: self.scale_len(rect.left),
-            top: self.scale_len(rect.top),
-            right: self.scale_len(rect.right),
-            bottom: self.scale_len(rect.bottom),
-        }
     }
 
     pub fn fill(&self, rect: RECT, color: COLORREF) {
@@ -158,11 +145,6 @@ impl Painter {
             SelectObject(self.hdc, old);
             let _ = DeleteObject(HGDIOBJ(brush.0));
         }
-    }
-
-    /// Текст внутри прямоугольника. Ширина и высота результата игнорируются.
-    pub fn text(&self, rect: RECT, text: &str, points: f32, bold: bool, color: COLORREF) {
-        self.text_with(rect, text, points, bold, color, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX)
     }
 
     /// Текст по центру, с переносом строк — так рисуются многострочные подписи.
@@ -205,6 +187,7 @@ impl Painter {
     }
 
     /// Прямоугольная кнопка в стиле исходного окна.
+    #[allow(clippy::too_many_arguments)]
     pub fn button(
         &self,
         rect: RECT,
@@ -347,10 +330,6 @@ impl Painter {
         self.fill(rect, SURFACE);
     }
 
-    pub fn text_primary(&self) -> COLORREF {
-        TEXT_PRIMARY
-    }
-
     pub fn text_muted(&self) -> COLORREF {
         TEXT_MUTED
     }
@@ -368,6 +347,18 @@ impl Painter {
 /// Прямоугольник из четырёх чисел — удобно задавать раскладку в коде окна.
 pub fn rect(left: i32, top: i32, width: i32, height: i32) -> RECT {
     RECT { left, top, right: left + width, bottom: top + height }
+}
+
+/// Переводит прямоугольник из логических координат в пиксели окна.
+pub fn scale_rect(rect: RECT, dpi: i32) -> RECT {
+    let scale = |value: i32| (value as f64 * dpi as f64 / 96.0).round() as i32;
+
+    RECT {
+        left: scale(rect.left),
+        top: scale(rect.top),
+        right: scale(rect.right),
+        bottom: scale(rect.bottom),
+    }
 }
 
 /// Лежит ли точка внутри прямоугольника.

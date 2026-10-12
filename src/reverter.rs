@@ -9,7 +9,7 @@ use crate::images;
 use crate::native;
 use crate::program::{self, RegKey};
 use crate::taskbar;
-use crate::taskbar_pins::{self, TaskbarResult};
+use crate::taskbar_pins::{self};
 use crate::theme;
 
 const DESKTOP_KEY: &str = r"Control Panel\Desktop";
@@ -23,11 +23,10 @@ pub fn revert_all(engine: Option<&mut crate::engine::OverlayEngine>, restore_lig
     }
     done.push("оверлей снят");
 
-    if theme::autostart_is_enabled() {
-        if theme::set_autostart(false).is_ok() {
+    if theme::autostart_is_enabled()
+        && theme::set_autostart(false).is_ok() {
             done.push("автозапуск выключен");
         }
-    }
 
     if clear_wallpaper_override() {
         done.push("системные обои возвращены");
@@ -56,7 +55,7 @@ pub fn revert_all(engine: Option<&mut crate::engine::OverlayEngine>, restore_lig
     native::redraw_desktop();
 
     let report = done.join(", ");
-    program::log(&format!("откат: {report}"));
+    program::log(format!("откат: {report}"));
     report
 }
 
@@ -78,13 +77,13 @@ fn restore_edge() -> bool {
                     program::log("откат: Edge снова браузер по умолчанию");
                     changed = true;
                 } else {
-                    program::log(&format!("откат: Edge не удалось вернуть браузером по умолчанию: {report}"));
+                    program::log(format!("откат: Edge не удалось вернуть браузером по умолчанию: {report}"));
                 }
             }
         }
     }
 
-    program::log(&format!(
+    program::log(format!(
         "откат Edge: {}",
         if changed { "восстановлено" } else { "изменений не потребовалось" }
     ));

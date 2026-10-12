@@ -93,7 +93,7 @@ impl OverlayState {
         }
 
         if let Some(rect) = native::get_window_rect(self.hwnd) {
-            program::log(&format!(
+            program::log(format!(
                 "размещено: client=({},{}) {}x{}, экран=({},{}) {}x{}",
                 origin.x,
                 origin.y,
@@ -124,7 +124,7 @@ impl OverlayState {
         if self.paint_log_count > MAX_PAINT_LOGS {
             return;
         }
-        program::log(&format!("[paint #{}] {}", self.paint_log_count, message));
+        program::log(format!("[paint #{}] {}", self.paint_log_count, message));
     }
 }
 
@@ -191,7 +191,7 @@ impl OverlayWindow {
         let hwnd = match hwnd {
             Ok(hwnd) => hwnd,
             Err(e) => {
-                program::log(&format!("CreateWindowEx вернул ошибку: {e}"));
+                program::log(format!("CreateWindowEx вернул ошибку: {e}"));
                 return None;
             }
         };
@@ -206,21 +206,13 @@ impl OverlayWindow {
         window.state.layout();
         window.state.force_repaint();
 
-        program::log(&format!(
+        program::log(format!(
             "прикреплено: hwnd={} host={}",
             hwnd.0 as usize,
             host.0 as usize
         ));
 
         Some(window)
-    }
-
-    pub fn hwnd(&self) -> HWND {
-        self.hwnd
-    }
-
-    pub fn host(&self) -> HWND {
-        self.host
     }
 
     /// Окно всё ещё существует.
@@ -424,7 +416,7 @@ unsafe fn paint(hwnd: HWND) {
 
 /// Копирует подготовленную картинку на окно.
 unsafe fn blit(hdc: HDC, scaled: &images::Wallpaper) {
-    let mut info = BITMAPINFO {
+    let info = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
             biWidth: scaled.width,
@@ -496,7 +488,7 @@ fn load_system_wallpaper() -> Option<DynamicImage> {
         match images::load(&path) {
             Ok(image) => return Some(image),
             Err(error) => {
-                program::log(&format!("не прочитаны системные обои {}: {error}", path.display()));
+                program::log(format!("не прочитаны системные обои {}: {error}", path.display()));
             }
         }
     }

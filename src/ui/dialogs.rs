@@ -6,7 +6,7 @@ use windows::Win32::UI::Controls::Dialogs::{ChooseColorW, CHOOSECOLORW, CC_FULLO
 use windows::Win32::UI::Shell::{FileOpenDialog, IFileOpenDialog, SIGDN_FILESYSPATH};
 use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
 use windows::Win32::UI::WindowsAndMessaging::{
-    MessageBoxW, MB_DEFBUTTON2, MB_ICONERROR, MB_ICONEXCLAMATION, MB_ICONINFORMATION, MB_ICONQUESTION,
+    MessageBoxW, MB_DEFBUTTON2, MB_ICONERROR, MB_ICONEXCLAMATION, MB_ICONQUESTION,
     MB_OK, MB_YESNO, MESSAGEBOX_STYLE, IDYES,
 };
 use windows::core::{HSTRING, PCWSTR};
@@ -99,11 +99,6 @@ pub fn confirm(owner: HWND, text: &str, caption: &str) -> bool {
 /// Сообщение об ошибке.
 pub fn show_error(owner: HWND, text: &str) {
     show(owner, text, program::APP_NAME, MB_OK | MB_ICONERROR);
-}
-
-/// Информационное сообщение.
-pub fn show_info(owner: HWND, text: &str, caption: &str) {
-    show(owner, text, caption, MB_OK | MB_ICONINFORMATION);
 }
 
 /// Предупреждение без значка «ошибка».
